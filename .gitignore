@@ -1,0 +1,5 @@
+covers
+/library.db
+target
+/*.md
+!README.md
