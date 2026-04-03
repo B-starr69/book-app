@@ -4,3 +4,8 @@ target
 .github/workflows/android-build.yml
 /*.md
 !README.md
+!QUICK_START.md
+!MOBILE_BUILD.md
+!WINDOWS_DEVELOPER_GUIDE.md
+!GITHUB_ACTIONS_GUIDE.md
+!iOS_INTEGRATION_GUIDE.md
