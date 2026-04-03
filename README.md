@@ -102,14 +102,14 @@ git push origin main
 ## 🎯 Platform Support
 
 ```
-✅ Android (ARM64, ARM32, x86_64)
-✅ iOS (device + simulator)
-✅ macOS (desktop)
-✅ Linux (desktop)
-✅ Windows (desktop)
+✅ Android (Full egui app - ARM64, ARM32, x86_64)
+✅ iOS (Rust library backend - device + simulator)
+✅ macOS (Desktop)
+✅ Linux (Desktop)
+✅ Windows (Desktop)
 ```
 
-All built from the same Rust + egui codebase!
+**Note:** iOS uses native Swift UI with Rust backend. See [iOS_INTEGRATION_GUIDE.md](iOS_INTEGRATION_GUIDE.md)
 
 ---
 

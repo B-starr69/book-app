@@ -1,4 +1,4 @@
-name: Build iOS App
+name: Build iOS Library
 
 on:
   push:
@@ -59,11 +59,13 @@ jobs:
           xcode-select --print-path
           xcodebuild -version
 
-      - name: Build release binary
+      - name: Build book-core library only
         run: |
+          cd book-core
           cargo build \
             --target ${{ matrix.target }} \
             --release \
+            --lib \
             --message-format=short
 
       - name: List build outputs
@@ -74,18 +76,18 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ios-${{ matrix.target }}-release
+          name: ios-book-core-${{ matrix.target }}-release
           path: |
             target/${{ matrix.target }}/release/*.a
-            target/${{ matrix.target }}/release/book_egui
           retention-days: 30
 
       - name: Create build report
         if: always()
         run: |
-          echo "## iOS Build Report - ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+          echo "## iOS Library Build Report - ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
           echo "**Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
           echo "**Target**: ${{ matrix.target }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Library**: book-core (Rust backend, no GUI)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -d "target/${{ matrix.target }}/release" ]; then
             echo "**Artifacts Found:**" >> $GITHUB_STEP_SUMMARY
@@ -93,8 +95,4 @@ jobs:
               size=$(du -h "$f" | cut -f1)
               echo "- \`$(basename $f)\` ($size)" >> $GITHUB_STEP_SUMMARY
             done
-          fi
-          if [ -f "target/${{ matrix.target }}/release/book_egui" ]; then
-            size=$(du -h "target/${{ matrix.target }}/release/book_egui" | cut -f1)
-            echo "- \`book_egui\` executable ($size)" >> $GITHUB_STEP_SUMMARY
           fi
