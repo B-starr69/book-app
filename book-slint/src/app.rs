@@ -306,7 +306,8 @@ impl BookApp {
         ui.on_open_book(move |book_id| {
             let tx = msg_tx_book.clone();
             let sources = sources_book.read().unwrap().clone();
-            let book_id = book_id.to_string();\r\n                        if let Some(source) = sources.first().cloned() {
+            let book_id = book_id.to_string();
+                        if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     // Check cache first
                     if let Ok(db) = Database::new() {
@@ -382,7 +383,8 @@ impl BookApp {
             let tx = msg_tx_chapter.clone();
             let sources = sources_chapter.read().unwrap().clone();
             let book_id = book_id.to_string();
-            let chapter_id = chapter_id.to_string();\r\n                        if let Some(source) = sources.first().cloned() {
+            let chapter_id = chapter_id.to_string();
+                        if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     // Fetch from network
                     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -394,7 +396,8 @@ impl BookApp {
                             discover_url: source.discover_url.clone(),
                             books_url: source.books_url.clone(),
                             config: book_core::models::SourceConfig::default(),
-                        };\r\n                        if let Some(chapter) = book_core::api::get_chapter_content(&source_cfg, book_id.clone(), chapter_id.clone()).await {
+                        };
+                        if let Some(chapter) = book_core::api::get_chapter_content(&source_cfg, book_id.clone(), chapter_id.clone()).await {
                             let _ = tx.send(Message::ChapterContentLoaded {
                                 content: chapter.content,
                                 book_id,
@@ -662,4 +665,5 @@ impl BookApp {
         }
     }
 }
+
 
