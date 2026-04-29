@@ -42,7 +42,7 @@ Invoke-Expression $buildCommand
 
 if ($LASTEXITCODE -eq 0) {
     $outDir = if ($release) { 'release' } else { 'debug' }
-    $libPath = "target\$rustTarget\$outDir\libbook_egui.a"
+    $libPath = "target\$rustTarget\$outDir\libbook_slint.a"
 
     Write-Host "`nBuild successful!" -ForegroundColor Green
     Write-Host "Output: $libPath" -ForegroundColor Green

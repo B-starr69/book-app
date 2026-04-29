@@ -1,0 +1,186 @@
+import { Theme, ChapterData } from "widgets/theme.slint";
+
+export component ReaderView inherits Rectangle {
+    in property <string> chapter-title;
+    in property <string> content;
+    in property <bool> dark-mode: true;
+    in-out property <float> font-size: 18;
+    in-out property <float> progress: 0;
+
+    callback go-back();
+    callback prev-chapter();
+    callback next-chapter();
+    callback save-progress(float);
+
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    VerticalLayout {
+        // Top bar
+        Rectangle {
+            height: 48px;
+            background: dark-mode ? Theme.sidebar-dark : Theme.sidebar-light;
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-sm;
+                padding-right: Theme.spacing-md;
+
+                TouchArea {
+                    width: 60px;
+                    clicked => { root.go-back(); }
+
+                    Text {
+                        text: "← Back";
+                        font-size: 14px;
+                        color: Theme.accent;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Chapter title
+                Text {
+                    horizontal-stretch: 1;
+                    text: chapter-title;
+                    font-size: 14px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+
+                // Font size controls
+                HorizontalLayout {
+                    width: 80px;
+                    spacing: 8px;
+
+                    TouchArea {
+                        width: 32px;
+                        clicked => {
+                            if font-size > 12 {
+                                font-size -= 2;
+                            }
+                        }
+
+                        Rectangle {
+                            border-radius: 4px;
+                            background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                            Text {
+                                text: "A-";
+                                font-size: 12px;
+                                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        width: 32px;
+                        clicked => {
+                            if font-size < 32 {
+                                font-size += 2;
+                            }
+                        }
+
+                        Rectangle {
+                            border-radius: 4px;
+                            background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                            Text {
+                                text: "A+";
+                                font-size: 14px;
+                                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Content area
+        content-area := Flickable {
+            vertical-stretch: 1;
+            viewport-height: content-text.preferred-height + 64px;
+
+            content-text := Text {
+                x: 16px;
+                y: 24px;
+                width: parent.width - 32px;
+                text: content;
+                font-size: root.font-size * 1px;
+                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                wrap: word-wrap;
+            }
+        }
+
+        // Bottom bar with progress and navigation
+        Rectangle {
+            height: 56px;
+            background: dark-mode ? Theme.sidebar-dark : Theme.sidebar-light;
+
+            VerticalLayout {
+                // Progress bar
+                Rectangle {
+                    height: 3px;
+                    background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                    Rectangle {
+                        width: parent.width * progress;
+                        height: 100%;
+                        background: Theme.accent;
+                    }
+                }
+
+                // Navigation
+                HorizontalLayout {
+                    padding: Theme.spacing-sm;
+
+                    // Prev chapter
+                    TouchArea {
+                        horizontal-stretch: 1;
+                        clicked => { root.prev-chapter(); }
+
+                        HorizontalLayout {
+                            alignment: start;
+
+                            Text {
+                                text: "← Prev";
+                                font-size: 14px;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Progress text
+                    Text {
+                        text: Math.round(progress * 100) + "%";
+                        font-size: 14px;
+                        color: dark-mode ? Theme.text-dark : Theme.text-light;
+                        vertical-alignment: center;
+                    }
+
+                    // Next chapter
+                    TouchArea {
+                        horizontal-stretch: 1;
+                        clicked => { root.next-chapter(); }
+
+                        HorizontalLayout {
+                            alignment: end;
+
+                            Text {
+                                text: "Next →";
+                                font-size: 14px;
+                                color: Theme.accent;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

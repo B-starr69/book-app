@@ -1,0 +1,71 @@
+import { Theme, BookData } from "theme.slint";
+
+export component BookCard inherits Rectangle {
+    in property <BookData> book;
+    in property <bool> dark-mode: true;
+
+    callback clicked();
+
+    width: 110px;
+    height: 170px;
+    border-radius: Theme.radius-lg;
+    background: dark-mode ? Theme.card-dark : Theme.card-light;
+    clip: true;
+
+    drop-shadow-blur: 12px;
+    drop-shadow-offset-y: 4px;
+    drop-shadow-color: Theme.shadow-color;
+
+    TouchArea {
+        clicked => { root.clicked(); }
+
+        VerticalLayout {
+            // Cover area
+            Rectangle {
+                height: 140px;
+                border-radius: Theme.radius-md;
+                background: Theme.accent.transparentize(0.85);
+                clip: true;
+
+                if book.cover-url != "" : Image {
+                    source: @image-url("");  // Placeholder - cover loading handled separately
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                }
+
+                if book.cover-url == "" : Text {
+                    text: "📚";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                // Progress bar at bottom of cover
+                if book.progress > 0 : Rectangle {
+                    y: parent.height - 3px;
+                    height: 3px;
+                    width: parent.width * book.progress;
+                    background: Theme.success;
+                }
+            }
+
+            // Title area
+            Rectangle {
+                height: 30px;
+                padding-left: 6px;
+                padding-right: 6px;
+                padding-top: 4px;
+
+                Text {
+                    text: book.title;
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                    overflow: elide;
+                    horizontal-alignment: left;
+                }
+            }
+        }
+    }
+}

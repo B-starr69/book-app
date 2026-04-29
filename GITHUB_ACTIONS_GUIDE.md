@@ -107,12 +107,12 @@ android {
 }
 ```
 
-Place `.so` files in: `src/main/jniLibs/arm64-v8a/libbook_egui.so`
+Place `.so` files in: `src/main/jniLibs/arm64-v8a/libbook_slint.so`
 
 **For iOS:**
 The binaries and libraries can be linked into an Xcode project:
 
-1. Add `book_egui` executable to Target Build Phases
+1. Add `book_slint` executable to Target Build Phases
 2. Link against static libraries (`.a` files)
 3. Configure in Xcode build settings
 
@@ -306,7 +306,7 @@ Workflows have minimal required permissions:
 - `.github/workflows/ios-build.yml` - iOS build automation
 - `.cargo/config.toml` - Build target configurations
 - `book-core/Cargo.toml` - Platform dependencies
-- `book-egui/Cargo.toml` - Mobile feature flags
+- `book-slint/Cargo.toml` - Mobile feature flags
 
 ## Summary
 

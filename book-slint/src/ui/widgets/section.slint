@@ -1,0 +1,56 @@
+import { Theme, BookData } from "theme.slint";
+import { BookCard } from "book_card.slint";
+
+export component Section inherits Rectangle {
+    in property <string> title;
+    in property <[BookData]> books;
+    in property <bool> dark-mode: true;
+
+    callback book-clicked(string);
+
+    height: 220px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: Theme.spacing-sm;
+
+        // Section header
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+
+            Text {
+                text: title;
+                font-size: 16px;
+                font-weight: 600;
+                color: dark-mode ? Theme.text-dark : Theme.text-light;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Text {
+                text: books.length + " books";
+                font-size: 11px;
+                color: Theme.text-muted-dark;
+                vertical-alignment: center;
+            }
+        }
+
+        // Horizontal scrollable book list
+        Flickable {
+            height: 180px;
+            viewport-width: books.length * 126px;
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-md;
+                spacing: Theme.spacing-md;
+
+                for book in books : BookCard {
+                    book: book;
+                    dark-mode: root.dark-mode;
+                    clicked => { root.book-clicked(book.id); }
+                }
+            }
+        }
+    }
+}

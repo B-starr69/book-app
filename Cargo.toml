@@ -2,5 +2,5 @@
 resolver = "2"
 members = [
     "book-core",
-    "book-egui",
+    "book-slint",
 ]

@@ -1,0 +1,78 @@
+// Theme colors and shared data structures
+// ============================================================================
+
+export global Theme {
+    // Colors matching original egui theme
+    out property <color> accent: #6366F1;
+    out property <color> success: #22C55E;
+    out property <color> warning: #FBBF24;
+    out property <color> error: #EF4444;
+
+    // Dark mode colors
+    out property <color> bg-dark: #0F0F14;
+    out property <color> card-dark: #1E1E28;
+    out property <color> sidebar-dark: #14141C;
+    out property <color> text-dark: #FFFFFF;
+    out property <color> text-muted-dark: #9CA3AF;
+
+    // Light mode colors
+    out property <color> bg-light: #FFFFFF;
+    out property <color> card-light: #F5F5FA;
+    out property <color> sidebar-light: #EBEFF5;
+    out property <color> text-light: #1F2937;
+    out property <color> text-muted-light: #6B7280;
+
+    // Spacing
+    out property <length> spacing-xs: 4px;
+    out property <length> spacing-sm: 8px;
+    out property <length> spacing-md: 16px;
+    out property <length> spacing-lg: 24px;
+
+    // Radii
+    out property <length> radius-sm: 8px;
+    out property <length> radius-md: 12px;
+    out property <length> radius-lg: 16px;
+
+    // Shadows
+    out property <color> shadow-color: #00000030;
+}
+
+// Data structures
+export struct BookData {
+    id: string,
+    title: string,
+    author: string,
+    cover-url: string,
+    progress: float,
+    chapters-count: int,
+    in-library: bool,
+}
+
+export struct ChapterData {
+    id: string,
+    title: string,
+    date: string,
+    progress: float,
+}
+
+export struct SectionData {
+    title: string,
+    books: [BookData],
+}
+
+export struct SearchResultData {
+    id: string,
+    title: string,
+    cover-url: string,
+    source-name: string,
+}
+
+// View state enum
+export enum ViewState {
+    Library,
+    Discover,
+    Search,
+    Settings,
+    BookDetails,
+    Reader,
+}

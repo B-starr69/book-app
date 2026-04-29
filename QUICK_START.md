@@ -49,7 +49,7 @@ book-app/
 │   │   ├── platform.rs       # Platform abstraction layer
 │   │   └── lib.rs            # Exports platform module
 │   └── Cargo.toml            # Updated for mobile dependencies
-├── book-egui/
+├── book-slint/
 │   ├── src/
 │   │   ├── main.rs           # Desktop entry point
 │   │   ├── main_android.rs   # Android JNI entry point

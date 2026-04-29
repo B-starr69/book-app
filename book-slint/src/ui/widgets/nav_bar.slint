@@ -1,0 +1,129 @@
+import { Theme, ViewState } from "theme.slint";
+
+export component NavBar inherits Rectangle {
+    in property <ViewState> current-view;
+    in property <bool> dark-mode: true;
+
+    callback navigate(ViewState);
+
+    height: 56px;
+    background: dark-mode ? Theme.sidebar-dark : Theme.sidebar-light;
+
+    HorizontalLayout {
+        padding: 4px;
+
+        nav-item := Rectangle {
+            horizontal-stretch: 1;
+
+            TouchArea {
+                clicked => { root.navigate(ViewState.Library); }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    // Active indicator
+                    Rectangle {
+                        height: 32px;
+                        width: 64px;
+                        border-radius: 16px;
+                        background: current-view == ViewState.Library ? Theme.accent.transparentize(0.85) : transparent;
+                        horizontal-stretch: 0;
+
+                        Text {
+                            text: "Library";
+                            font-size: 14px;
+                            color: current-view == ViewState.Library ? Theme.accent :
+                                   (dark-mode ? Theme.text-muted-dark : Theme.text-muted-light);
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+
+            TouchArea {
+                clicked => { root.navigate(ViewState.Discover); }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        height: 32px;
+                        width: 64px;
+                        border-radius: 16px;
+                        background: current-view == ViewState.Discover ? Theme.accent.transparentize(0.85) : transparent;
+
+                        Text {
+                            text: "Discover";
+                            font-size: 14px;
+                            color: current-view == ViewState.Discover ? Theme.accent :
+                                   (dark-mode ? Theme.text-muted-dark : Theme.text-muted-light);
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+
+            TouchArea {
+                clicked => { root.navigate(ViewState.Search); }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        height: 32px;
+                        width: 64px;
+                        border-radius: 16px;
+                        background: current-view == ViewState.Search ? Theme.accent.transparentize(0.85) : transparent;
+
+                        Text {
+                            text: "Search";
+                            font-size: 14px;
+                            color: current-view == ViewState.Search ? Theme.accent :
+                                   (dark-mode ? Theme.text-muted-dark : Theme.text-muted-light);
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+
+            TouchArea {
+                clicked => { root.navigate(ViewState.Settings); }
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        height: 32px;
+                        width: 64px;
+                        border-radius: 16px;
+                        background: current-view == ViewState.Settings ? Theme.accent.transparentize(0.85) : transparent;
+
+                        Text {
+                            text: "Settings";
+                            font-size: 14px;
+                            color: current-view == ViewState.Settings ? Theme.accent :
+                                   (dark-mode ? Theme.text-muted-dark : Theme.text-muted-light);
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

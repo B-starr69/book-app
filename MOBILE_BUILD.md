@@ -162,7 +162,7 @@ import android.view.WindowManager;
 public class BookAppActivity extends Activity {
 
     static {
-        System.loadLibrary("book_egui");
+        System.loadLibrary("book_slint");
     }
 
     @Override

@@ -1,0 +1,124 @@
+import { Theme, BookData, SectionData } from "widgets/theme.slint";
+import { Section } from "widgets/section.slint";
+
+export component DiscoverView inherits Rectangle {
+    in property <[SectionData]> sections;
+    in property <bool> is-loading;
+    in property <bool> dark-mode: true;
+
+    callback refresh();
+    callback open-book(string);
+
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    VerticalLayout {
+        padding-top: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        // Header
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+
+            Text {
+                text: "Discover";
+                font-size: 20px;
+                font-weight: 700;
+                color: dark-mode ? Theme.text-dark : Theme.text-light;
+            }
+
+            Rectangle { horizontal-stretch: 1; }
+
+            Rectangle {
+                width: 70px;
+                height: 36px;
+                border-radius: 4px;
+                background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                TouchArea {
+                    enabled: !is-loading;
+                    clicked => { root.refresh(); }
+
+                    Text {
+                        text: is-loading ? "⏳" : "↻";
+                        font-size: 16px;
+                        color: dark-mode ? Theme.text-dark : Theme.text-light;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Loading state
+        if is-loading && sections.length == 0 : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Text {
+                    text: "⏳";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Loading discover...";
+                    font-size: 14px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Sections list
+        if sections.length > 0 : Flickable {
+            vertical-stretch: 1;
+            viewport-height: sections.length * 230px;
+
+            VerticalLayout {
+                spacing: Theme.spacing-md;
+
+                for section in sections : Section {
+                    title: section.title;
+                    books: section.books;
+                    dark-mode: root.dark-mode;
+                    book-clicked(id) => { root.open-book(id); }
+                }
+            }
+        }
+
+        // Empty state (no sections and not loading)
+        if !is-loading && sections.length == 0 : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "🔍";
+                    font-size: 48px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "No content found";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Tap refresh to try again";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

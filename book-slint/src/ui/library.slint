@@ -1,0 +1,143 @@
+import { Theme, BookData, ViewState } from "widgets/theme.slint";
+import { BookCard } from "widgets/book_card.slint";
+import { NavBar } from "widgets/nav_bar.slint";
+
+export component LibraryView inherits Rectangle {
+    in property <[BookData]> books;
+    in property <bool> is-loading;
+    in property <bool> dark-mode: true;
+
+    callback refresh();
+    callback open-book(string);
+
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-sm;
+
+        // Header
+        HorizontalLayout {
+            alignment: space-between;
+
+            Text {
+                text: "My Library";
+                font-size: 20px;
+                font-weight: 700;
+                color: dark-mode ? Theme.text-dark : Theme.text-light;
+            }
+
+            HorizontalLayout {
+                spacing: Theme.spacing-sm;
+
+                Text {
+                    text: books.length + " books";
+                    font-size: 12px;
+                    color: dark-mode ? Theme.text-muted-dark : Theme.text-muted-light;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: 70px;
+                    height: 40px;
+                    border-radius: 4px;
+                    background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                    TouchArea {
+                        enabled: !is-loading && books.length > 0;
+                        clicked => { root.refresh(); }
+
+                        Text {
+                            text: "Refresh";
+                            font-size: 14px;
+                            color: parent.enabled ? (dark-mode ? Theme.text-dark : Theme.text-light) : Theme.text-muted-dark;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Loading state
+        if is-loading : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+
+                // Spinner placeholder
+                Text {
+                    text: "⏳";
+                    font-size: 24px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Updating library...";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Empty state
+        if !is-loading && books.length == 0 : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "📚";
+                    font-size: 48px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Your library is empty";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Browse 'Discover' to find books!";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Book grid
+        if !is-loading && books.length > 0 : Flickable {
+            vertical-stretch: 1;
+            viewport-height: self.height;  // Will be calculated based on content
+
+            // Grid of books (using HorizontalLayout with wrapping simulation)
+            VerticalLayout {
+                spacing: Theme.spacing-md;
+
+                for row in 10 : HorizontalLayout {
+                    spacing: Theme.spacing-md;
+
+                    for col in 3 : Rectangle {
+                        width: 110px;
+                        height: 170px;
+
+                        if row * 3 + col < books.length : BookCard {
+                            book: books[row * 3 + col];
+                            dark-mode: root.dark-mode;
+                            clicked => { root.open-book(self.book.id); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

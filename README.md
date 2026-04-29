@@ -1,6 +1,6 @@
 # 📱 Book App - Mobile Reader
 
-A beautiful, high-performance ebook reader built with Rust and egui, designed for mobile (Android/iOS) and desktop platforms.
+A beautiful, high-performance ebook reader built with Rust and slint, designed for mobile (Android/iOS) and desktop platforms.
 
 ## Quick Links
 
@@ -60,7 +60,7 @@ Command reference:
 
 ### Source Code
 - **book-core/** - Rust library (book parsing, database, API)
-- **book-egui/** - UI layer (desktop/mobile)
+- **book-slint/** - UI layer (desktop/mobile)
 - **Cargo.toml** - Workspace configuration
 
 ### Build Configuration
@@ -145,7 +145,7 @@ Book App
 ## 📦 Technology Stack
 
 - **Language**: Rust
-- **UI Framework**: egui
+- **UI Framework**: slint
 - **Database**: SQLite
 - **Networking**: reqwest (async)
 - **Build System**: Cargo

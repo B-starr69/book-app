@@ -1,0 +1,254 @@
+import { Theme, BookData, SearchResultData } from "widgets/theme.slint";
+import { BookCard } from "widgets/book_card.slint";
+
+export component SearchView inherits Rectangle {
+    in property <[SearchResultData]> results;
+    in property <bool> is-searching;
+    in property <bool> dark-mode: true;
+    in-out property <string> query;
+
+    callback search(string);
+    callback open-book(string);
+
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Header
+        Text {
+            text: "🌐 Search All";
+            font-size: 18px;
+            font-weight: 700;
+            color: dark-mode ? Theme.text-dark : Theme.text-light;
+        }
+
+        // Search bar
+        HorizontalLayout {
+            spacing: Theme.spacing-sm;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: 44px;
+                border-radius: 8px;
+                background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+
+                    Text {
+                        text: "🔍";
+                        font-size: 16px;
+                        vertical-alignment: center;
+                    }
+
+                    search-input := TextInput {
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        font-size: 14px;
+                        text <=> root.query;
+                        color: dark-mode ? Theme.text-dark : Theme.text-light;
+
+                        accepted => {
+                            if self.text != "" {
+                                root.search(self.text);
+                            }
+                        }
+                    }
+
+                    // Clear button
+                    if query != "" : TouchArea {
+                        width: 24px;
+                        clicked => { root.query = ""; }
+
+                        Text {
+                            text: "✕";
+                            font-size: 14px;
+                            color: Theme.text-muted-dark;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Search button
+            Rectangle {
+                width: 44px;
+                height: 44px;
+                border-radius: 8px;
+                background: Theme.accent;
+
+                TouchArea {
+                    enabled: !is-searching && query != "";
+                    clicked => { root.search(query); }
+
+                    Text {
+                        text: is-searching ? "⏳" : "→";
+                        font-size: 18px;
+                        color: white;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Loading state
+        if is-searching && results.length == 0 : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 8px;
+
+                Text {
+                    text: "⏳";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Searching...";
+                    font-size: 14px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Results
+        if results.length > 0 : Flickable {
+            vertical-stretch: 1;
+            viewport-height: ((results.length + 2) / 3) * 186px;
+
+            VerticalLayout {
+                spacing: Theme.spacing-md;
+
+                // Results count
+                Text {
+                    text: results.length + " results";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                }
+
+                // Grid of results
+                for row in 20 : HorizontalLayout {
+                    spacing: Theme.spacing-md;
+
+                    for col in 3 : Rectangle {
+                        width: 110px;
+                        height: 170px;
+
+                        if row * 3 + col < results.length : Rectangle {
+                            background: dark-mode ? Theme.card-dark : Theme.card-light;
+                            border-radius: Theme.radius-lg;
+                            clip: true;
+
+                            property <SearchResultData> result: results[row * 3 + col];
+
+                            TouchArea {
+                                clicked => { root.open-book(result.id); }
+
+                                VerticalLayout {
+                                    // Cover placeholder
+                                    Rectangle {
+                                        height: 140px;
+                                        background: Theme.accent.transparentize(0.85);
+
+                                        Text {
+                                            text: "📚";
+                                            font-size: 32px;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // Title
+                                    Rectangle {
+                                        height: 30px;
+
+                                        VerticalLayout {
+                                            padding: 4px;
+
+                                            Text {
+                                                text: result.title;
+                                                font-size: 10px;
+                                                font-weight: 600;
+                                                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                                                overflow: elide;
+                                            }
+
+                                            Text {
+                                                text: result.source-name;
+                                                font-size: 8px;
+                                                color: Theme.accent;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Empty initial state
+        if !is-searching && results.length == 0 && query == "" : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "🔍";
+                    font-size: 48px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Search all sources";
+                    font-size: 14px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // No results state
+        if !is-searching && results.length == 0 && query != "" : Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 12px;
+
+                Text {
+                    text: "😕";
+                    font-size: 48px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "No results found";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Try a different search term";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

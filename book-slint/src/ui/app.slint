@@ -1,0 +1,136 @@
+import { Theme, BookData, ChapterData, SectionData, SearchResultData, ViewState } from "widgets/theme.slint";
+import { NavBar } from "widgets/nav_bar.slint";
+import { LibraryView } from "library.slint";
+import { DiscoverView } from "discover.slint";
+import { SearchView } from "search.slint";
+import { BookDetailsView } from "book_details.slint";
+import { ReaderView } from "reader.slint";
+import { SettingsView } from "settings.slint";
+
+export { Theme, BookData, ChapterData, SectionData, SearchResultData, ViewState }
+
+export component App inherits Window {
+    title: "Book App";
+    width: 390px;
+    height: 844px;
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    // State properties
+    in-out property <ViewState> current-view: ViewState.Library;
+    in-out property <bool> dark-mode: true;
+    in-out property <bool> is-loading: false;
+    in-out property <string> error-message;
+
+    // Data properties
+    in-out property <[BookData]> library-books: [];
+    in-out property <[SectionData]> discover-sections: [];
+    in-out property <[SearchResultData]> search-results: [];
+    in-out property <BookData> current-book;
+    in-out property <[ChapterData]> book-chapters: [];
+    in-out property <string> book-summary;
+    in-out property <string> chapter-content;
+    in-out property <string> chapter-title;
+    in-out property <string> current-chapter-id;
+    in-out property <string> current-book-id;
+    in-out property <string> search-query;
+    in-out property <bool> is-searching: false;
+    in-out property <float> reader-font-size: 18;
+    in-out property <float> reader-progress: 0;
+
+    // Callbacks to Rust
+    callback navigate(ViewState);
+    callback load-library();
+    callback load-discover();
+    callback open-book(string);
+    callback read-chapter(string, string);
+    callback search(string);
+    callback add-to-library();
+    callback remove-from-library();
+    callback update-chapter-progress(string, string, float);
+    callback on-cover-loaded(string, image);
+    callback prev-chapter();
+    callback next-chapter();
+    callback toggle-dark-mode();
+    callback clear-cache();
+
+    VerticalLayout {
+        // Main content area
+        Rectangle {
+            vertical-stretch: 1;
+
+            // Library View
+            if current-view == ViewState.Library : LibraryView {
+                books: library-books;
+                is-loading: root.is-loading;
+                dark-mode: root.dark-mode;
+                refresh => { root.load-library(); }
+                open-book(id) => { root.open-book(id); }
+            }
+
+            // Discover View
+            if current-view == ViewState.Discover : DiscoverView {
+                sections: discover-sections;
+                is-loading: root.is-loading;
+                dark-mode: root.dark-mode;
+                refresh => { root.load-discover(); }
+                open-book(id) => { root.open-book(id); }
+            }
+
+            // Search View
+            if current-view == ViewState.Search : SearchView {
+                results: search-results;
+                is-searching: root.is-searching;
+                dark-mode: root.dark-mode;
+                query <=> root.search-query;
+                search(q) => { root.search(q); }
+                open-book(id) => { root.open-book(id); }
+            }
+
+            // Settings View
+            if current-view == ViewState.Settings : SettingsView {
+                dark-mode: root.dark-mode;
+                dark-mode-enabled: root.dark-mode;
+                toggle-dark-mode => { root.dark-mode = !root.dark-mode; }
+                clear-cache => { root.clear-cache(); }
+            }
+
+            // Book Details View
+            if current-view == ViewState.BookDetails : BookDetailsView {
+                book: current-book;
+                chapters: book-chapters;
+                summary: book-summary;
+                is-loading: root.is-loading;
+                dark-mode: root.dark-mode;
+                go-back => { root.current-view = ViewState.Library; }
+                add-to-library => { root.add-to-library(); }
+                remove-from-library => { root.remove-from-library(); }
+                read-chapter(id) => { root.read-chapter(current-book.id, id); }
+            }
+
+            // Reader View
+            if current-view == ViewState.Reader : ReaderView {
+                chapter-title: root.chapter-title;
+                content: chapter-content;
+                dark-mode: root.dark-mode;
+                font-size <=> root.reader-font-size;
+                progress <=> root.reader-progress;
+                go-back => { root.current-view = ViewState.BookDetails; }
+                prev-chapter => { root.prev-chapter(); }
+                next-chapter => { root.next-chapter(); }
+                save-progress(p) => { root.update-chapter-progress(root.current-book-id, root.current-chapter-id, p); }
+            }
+        }
+
+        // Bottom navigation (hidden in reader/details view)
+        if current-view != ViewState.Reader && current-view != ViewState.BookDetails : NavBar {
+            current-view: root.current-view;
+            dark-mode: root.dark-mode;
+            navigate(view) => {
+                root.current-view = view;
+                if view == ViewState.Discover && discover-sections.length == 0 {
+                    root.load-discover();
+                }
+            }
+        }
+    }
+}

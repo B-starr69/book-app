@@ -1,0 +1,196 @@
+import { Theme } from "widgets/theme.slint";
+
+export component SettingsView inherits Rectangle {
+    in property <bool> dark-mode: true;
+    in-out property <bool> dark-mode-enabled: true;
+
+    callback toggle-dark-mode();
+    callback manage-sources();
+    callback clear-cache();
+
+    background: dark-mode ? Theme.bg-dark : Theme.bg-light;
+
+    VerticalLayout {
+        padding: Theme.spacing-md;
+        spacing: Theme.spacing-md;
+
+        // Header
+        Text {
+            text: "Settings";
+            font-size: 20px;
+            font-weight: 700;
+            color: dark-mode ? Theme.text-dark : Theme.text-light;
+        }
+
+        // Settings list
+        VerticalLayout {
+            spacing: 2px;
+
+            // Dark mode toggle
+            Rectangle {
+                height: 56px;
+                border-radius: 8px;
+                background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+
+                        Text {
+                            text: "Dark Mode";
+                            font-size: 15px;
+                            color: dark-mode ? Theme.text-dark : Theme.text-light;
+                        }
+
+                        Text {
+                            text: "Use dark theme throughout the app";
+                            font-size: 11px;
+                            color: Theme.text-muted-dark;
+                        }
+                    }
+
+                    // Toggle switch
+                    TouchArea {
+                        width: 50px;
+                        clicked => {
+                            dark-mode-enabled = !dark-mode-enabled;
+                            root.toggle-dark-mode();
+                        }
+
+                        Rectangle {
+                            width: 50px;
+                            height: 28px;
+                            border-radius: 14px;
+                            background: dark-mode-enabled ? Theme.accent : Theme.text-muted-light;
+
+                            Rectangle {
+                                x: dark-mode-enabled ? parent.width - self.width - 2px : 2px;
+                                y: 2px;
+                                width: 24px;
+                                height: 24px;
+                                border-radius: 12px;
+                                background: white;
+
+                                animate x { duration: 150ms; }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sources
+            Rectangle {
+                height: 56px;
+                border-radius: 8px;
+                background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                TouchArea {
+                    clicked => { root.manage-sources(); }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+
+                            Text {
+                                text: "Manage Sources";
+                                font-size: 15px;
+                                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                            }
+
+                            Text {
+                                text: "Add, edit, or remove book sources";
+                                font-size: 11px;
+                                color: Theme.text-muted-dark;
+                            }
+                        }
+
+                        Text {
+                            text: "→";
+                            font-size: 18px;
+                            color: Theme.text-muted-dark;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Clear cache
+            Rectangle {
+                height: 56px;
+                border-radius: 8px;
+                background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+                TouchArea {
+                    clicked => { root.clear-cache(); }
+
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+
+                            Text {
+                                text: "Clear Cache";
+                                font-size: 15px;
+                                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                            }
+
+                            Text {
+                                text: "Delete cached chapters and covers";
+                                font-size: 11px;
+                                color: Theme.text-muted-dark;
+                            }
+                        }
+
+                        Text {
+                            text: "🗑";
+                            font-size: 18px;
+                            color: Theme.warning;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Spacer
+        Rectangle { vertical-stretch: 1; }
+
+        // App info
+        VerticalLayout {
+            spacing: 4px;
+
+            Text {
+                text: "Book Reader";
+                font-size: 14px;
+                font-weight: 600;
+                color: dark-mode ? Theme.text-dark : Theme.text-light;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Built with Slint + Rust";
+                font-size: 11px;
+                color: Theme.text-muted-dark;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "v0.1.0";
+                font-size: 10px;
+                color: Theme.text-muted-dark;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

@@ -1,0 +1,30 @@
+[package]
+name = "book-slint"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+slint = "1.9"
+book-core = { path = "../book-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+reqwest = { version = "0.12", features = ["blocking"] }
+
+[build-dependencies]
+slint-build = "1.9"
+
+# Desktop
+[[bin]]
+name = "book-slint"
+path = "src/main.rs"
+
+# Android support
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+log = "0.4"
+
+[lib]
+name = "book_slint_lib"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
