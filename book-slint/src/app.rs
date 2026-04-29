@@ -328,7 +328,7 @@ impl BookApp {
                             books_url: source.books_url.clone(),
                             config: book_core::models::SourceConfig::default(),
                         };
-n                        if let Some(details) = book_core::api::get_book_details(&source_cfg, book_id.clone()).await {
+n                        if let Some(details) = book_core::api::get_book_details(&source_cfg, book_id.clone()).await {
                             let book = Book {
                                 id: book_id.clone(),
                                 source_id: source.id.clone(),
@@ -665,5 +665,6 @@ impl BookApp {
         }
     }
 }
+
 
 
