@@ -3,7 +3,7 @@
 // ============================================================================
 
 use crate::{App, BookData, ChapterData, SectionData, SearchResultData, ViewState};
-use book_core::{api::Api, Book, Chapter, Database, HomeSection, SearchResult, Source};
+use book_core::{Book, Chapter, Database, HomeSection, SearchResult, Source};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Image, Rgba8Pixel, SharedPixelBuffer};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, RwLock};
@@ -23,7 +23,7 @@ pub enum Message {
     BookRemoved { book_id: String },
 }
 
-/// Cover cache helper functions (similar to book-egui)
+/// Cover cache helper functions
 mod cover_cache {
     use std::path::PathBuf;
 
@@ -134,9 +134,7 @@ impl BookApp {
         // Initialize database
         let database = Arc::new(Database::new().ok());
 
-        // Initialize Api (which loads scripts now)
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let api = Arc::new(rt.block_on(async { Api::new().await.unwrap() }));
+        // API functions are called directly from book_core::api
 
         // Load sources
         let mut sources = if let Some(ref db) = *database {
@@ -179,7 +177,7 @@ impl BookApp {
         let current_book_state = Arc::new(RwLock::new(None::<Book>));
 
         // Setup callbacks
-        Self::setup_callbacks(&ui, msg_tx.clone(), Arc::clone(&sources), Arc::clone(&api), Arc::clone(&database), Arc::clone(&current_book_state));
+        Self::setup_callbacks(&ui, msg_tx.clone(), Arc::clone(&sources), Arc::clone(&database), Arc::clone(&current_book_state));
 
         // Setup timer to poll for async messages
         let ui_weak = ui.as_weak();
@@ -247,7 +245,6 @@ impl BookApp {
         ui: &App,
         msg_tx: Sender<Message>,
         sources: Arc<RwLock<Vec<Source>>>,
-        api: Arc<Api>,
         _database: Arc<Option<Database>>,
         current_book_state: Arc<RwLock<Option<Book>>>,
     ) {
@@ -274,11 +271,9 @@ impl BookApp {
         // Load discover callback
         let msg_tx_discover = msg_tx.clone();
         let sources_discover = Arc::clone(&sources);
-        let api_discover = Arc::clone(&api);
         ui.on_load_discover(move || {
             let tx = msg_tx_discover.clone();
             let sources = sources_discover.read().unwrap().clone();
-            let api = Arc::clone(&api_discover);
             if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -308,21 +303,13 @@ impl BookApp {
         // Open book callback
         let msg_tx_book = msg_tx.clone();
         let sources_book = Arc::clone(&sources);
-        let api_book = Arc::clone(&api);
         ui.on_open_book(move |book_id| {
             let tx = msg_tx_book.clone();
             let sources = sources_book.read().unwrap().clone();
-            // Since api_book is not Send due to rquickjs contexts,
-            // we spawn a new tokio runtime on a new thread and we clone the Api?
-            // Wait, we can't clone the api because ScriptEngine cannot be shared between threads.
-            // Let's use the main async tokio handle to spawn a local task?
-            let book_id = book_id.to_string();
-
-            if let Some(source) = sources.first().cloned() {
+            let book_id = book_id.to_string();\r\n                        if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     // Check cache first
                     if let Ok(db) = Database::new() {
-                        // TODO: Implement needs_sync checking if required
                         if let Ok(Some(cached_book)) = db.get_full_book(&book_id, &source.id) {
                             let _ = tx.send(Message::BookDetailsLoaded(cached_book));
                             return;
@@ -332,7 +319,15 @@ impl BookApp {
                     // Fetch from network
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        if let Ok(details) = api.get_book_details(&source.id, &book_id).await {
+                        let source_cfg = book_core::models::SourceWithConfig {
+                            id: source.id.clone(),
+                            url: source.url.clone(),
+                            name: source.name.clone(),
+                            discover_url: source.discover_url.clone(),
+                            books_url: source.books_url.clone(),
+                            config: book_core::models::SourceConfig::default(),
+                        };
+n                        if let Some(details) = book_core::api::get_book_details(&source_cfg, book_id.clone()).await {
                             let book = Book {
                                 id: book_id.clone(),
                                 source_id: source.id.clone(),
@@ -383,37 +378,23 @@ impl BookApp {
         // Read chapter callback
         let msg_tx_chapter = msg_tx.clone();
         let sources_chapter = Arc::clone(&sources);
-        let api_chapter = Arc::clone(&api);
         ui.on_read_chapter(move |book_id, chapter_id| {
             let tx = msg_tx_chapter.clone();
             let sources = sources_chapter.read().unwrap().clone();
-            let api = Arc::clone(&api_chapter);
             let book_id = book_id.to_string();
-            let chapter_id = chapter_id.to_string();
-
-            if let Some(source) = sources.first().cloned() {
+            let chapter_id = chapter_id.to_string();\r\n                        if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
-                    // Check cache first
-                    // if let Ok(db) = Database::new() {
-                    //     if let Ok(Some(content)) = db.get_cached_chapter_content(&book_id, &source.id, &chapter_id) {
-                    //         let _ = tx.send(Message::ChapterContentLoaded {
-                    //             content,
-                    //             book_id,
-                    //             chapter_id
-                    //         });
-                    //         return;
-                    //     }
-                    // }
-
                     // Fetch from network
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        if let Ok(chapter) = api.get_chapter_content(&source.id, &book_id, &chapter_id).await {
-                            // Cache content
-                            // if let Ok(db) = Database::new() {
-                            //     let _ = db.cache_chapter_content(&book_id, &source.id, &chapter_id, &chapter.content);
-                            // }
-
+                        let source_cfg = book_core::models::SourceWithConfig {
+                            id: source.id.clone(),
+                            url: source.url.clone(),
+                            name: source.name.clone(),
+                            discover_url: source.discover_url.clone(),
+                            books_url: source.books_url.clone(),
+                            config: book_core::models::SourceConfig::default(),
+                        };\r\n                        if let Some(chapter) = book_core::api::get_chapter_content(&source_cfg, book_id.clone(), chapter_id.clone()).await {
                             let _ = tx.send(Message::ChapterContentLoaded {
                                 content: chapter.content,
                                 book_id,
@@ -476,17 +457,23 @@ impl BookApp {
 
         // Search callback
         let sources_search = Arc::clone(&sources);
-        let api_search = Arc::clone(&api);
         ui.on_search(move |query| {
             let tx = msg_tx.clone();
             let sources = sources_search.read().unwrap().clone();
-            let api = Arc::clone(&api_search);
             let query = query.to_string();
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     if let Some(source) = sources.first() {
-                        if let Ok(results) = api.search(&source.id, &query).await {
+                        let source_cfg = book_core::models::SourceWithConfig {
+                            id: source.id.clone(),
+                            url: source.url.clone(),
+                            name: source.name.clone(),
+                            discover_url: source.discover_url.clone(),
+                            books_url: source.books_url.clone(),
+                            config: book_core::models::SourceConfig::default(),
+                        };
+                        if let Some(results) = book_core::api::search_books(&source_cfg, &query).await {
                             let _ = tx.send(Message::SearchResults(results));
                         }
                     }
@@ -675,3 +662,4 @@ impl BookApp {
         }
     }
 }
+
