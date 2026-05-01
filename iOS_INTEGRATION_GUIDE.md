@@ -5,7 +5,7 @@
 The iOS build on GitHub Actions compiles **only the Rust backend library** (`book-core`), not the UI. This is because:
 
 - ✅ `book-core` (pure Rust) - builds perfectly on iOS
-- ❌ `book-egui` (GUI framework) - requires native iOS wrapper (egui is UI-only, not a complete app framework)
+- ❌ `book-slint` (GUI framework) - requires native iOS wrapper (Slint is UI-only, not a complete app framework)
 
 **Your options:**
 
@@ -17,9 +17,6 @@ Create a native iOS app in Swift that:
 
 ### Option 2: Quick Web Wrapper
 Create a simple UIWebView that loads a web UI served by the Rust backend.
-
-### Option 3: Waiting for egui iOS Support
-egui is working on iOS support, but it's not production-ready yet. Check [egui GitHub](https://github.com/emilk/egui) for updates.
 
 ---
 
@@ -279,11 +276,11 @@ Your iOS App
 
 ---
 
-## Why Not egui on iOS?
+## Why Not Desktop Frameworks on iOS?
 
-egui is a **UI framework**, not a complete application framework. For iOS you need:
+Desktop UI frameworks like Slint are designed primarily for desktop platforms. For iOS you need:
 
-1. **App lifecycle management** - egui doesn't handle iOS lifecycle
+1. **App lifecycle management** - Desktop frameworks don't handle iOS lifecycle
 2. **Native UI components** - iOS expects SwiftUI/UIKit
 3. **System integration** - Camera, contacts, notifications, etc.
 4. **App store requirements** - Apple's guidelines

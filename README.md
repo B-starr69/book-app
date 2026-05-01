@@ -102,7 +102,7 @@ git push origin main
 ## 🎯 Platform Support
 
 ```
-✅ Android (Full egui app - ARM64, ARM32, x86_64)
+✅ Android (Full Slint app - ARM64, ARM32, x86_64)
 ✅ iOS (Rust library backend - device + simulator)
 ✅ macOS (Desktop)
 ✅ Linux (Desktop)
@@ -134,10 +134,9 @@ Book App
 │   ├── Book parsing
 │   └── Platform abstraction
 │
-└── book-egui (UI)
+└── book-slint (UI)
     ├── Desktop entry point
-    ├── Android entry point (JNI)
-    └── iOS entry point
+    └── Android entry point (JNI)
 ```
 
 ---

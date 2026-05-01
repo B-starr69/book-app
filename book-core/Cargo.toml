@@ -20,8 +20,10 @@ futures = "0.3"
 once_cell = "1.21"
 regex = "1.12"
 urlencoding = "2.1"
+url = "2"
 dirs = "5.0"
 log = "0.4"
+rquickjs = "0.11"
 
 # Mobile app lifecycle
 [target.'cfg(target_os = "android")'.dependencies]

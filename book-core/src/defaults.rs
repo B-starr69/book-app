@@ -59,6 +59,8 @@ pub fn novelfire_source() -> SourceWithConfig {
         name: "NovelFire".to_string(),
         discover_url: "https://novelfire.net/home".to_string(),
         books_url: "https://novelfire.net/book".to_string(),
+        icon_url: None,
+        description: None,
         config: novelfire_config(),
     }
 }
@@ -149,6 +151,8 @@ pub fn example_source_template() -> SourceWithConfig {
         name: "Example Site".to_string(),
         discover_url: "https://example.com/browse".to_string(),
         books_url: "https://example.com/novel".to_string(),
+        icon_url: None,
+        description: None,
         config: SourceConfig {
             home: HomeSelectors {
                 section: ".book-list-section".to_string(),

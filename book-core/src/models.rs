@@ -99,6 +99,10 @@ pub struct Source {
     pub name: String,
     pub discover_url: String,
     pub books_url: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 /// Cache statistics for monitoring storage usage
@@ -291,5 +295,9 @@ pub struct SourceWithConfig {
     pub name: String,
     pub discover_url: String,
     pub books_url: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
     pub config: SourceConfig,
 }

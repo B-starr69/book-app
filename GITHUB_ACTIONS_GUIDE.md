@@ -46,7 +46,6 @@ With GitHub Actions, you can:
 
 **Outputs:**
 - `.a` (static library) files
-- `book_egui` executable
 - Artifacts available for 30 days
 
 ## How to Use

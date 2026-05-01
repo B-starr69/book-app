@@ -20,6 +20,8 @@ export component App inherits Window {
     in-out property <bool> dark-mode: true;
     in-out property <bool> is-loading: false;
     in-out property <string> error-message;
+    in-out property <bool> show-import-dialog: false;
+    in-out property <string> import-repo-url: "";
 
     // Data properties
     in-out property <[BookData]> library-books: [];
@@ -52,6 +54,9 @@ export component App inherits Window {
     callback next-chapter();
     callback toggle-dark-mode();
     callback clear-cache();
+    callback manage-sources();
+    callback import-github(string);
+    callback close-import-dialog();
 
     VerticalLayout {
         // Main content area
@@ -91,6 +96,7 @@ export component App inherits Window {
                 dark-mode: root.dark-mode;
                 dark-mode-enabled: root.dark-mode;
                 toggle-dark-mode => { root.dark-mode = !root.dark-mode; }
+                manage-sources => { root.manage-sources(); }
                 clear-cache => { root.clear-cache(); }
             }
 
@@ -118,6 +124,60 @@ export component App inherits Window {
                 prev-chapter => { root.prev-chapter(); }
                 next-chapter => { root.next-chapter(); }
                 save-progress(p) => { root.update-chapter-progress(root.current-book-id, root.current-chapter-id, p); }
+            }
+
+            // Import dialog overlay
+            if root.show-import-dialog : Rectangle {
+                x: 20px; y: 120px; width: parent.width - 40px; height: 200px;
+                border-radius: 12px;
+                background: root.dark-mode ? Theme.card-dark : Theme.card-light;
+
+                VerticalLayout {
+                    padding: Theme.spacing-md;
+                    spacing: Theme.spacing-md;
+
+                    Text { text: "Import sources from GitHub"; font-size: 16px; font-weight: 700; color: root.dark-mode ? Theme.text-dark : Theme.text-light; }
+
+                    TextInput {
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        font-size: 14px;
+                        text <=> root.import-repo-url;
+                        color: root.dark-mode ? Theme.text-dark : Theme.text-light;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.spacing-sm;
+
+                        // Cancel button
+                        Rectangle {
+                            width: 120px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: root.dark-mode ? Theme.sidebar-dark : Theme.sidebar-light;
+
+                            TouchArea {
+                                clicked => { root.close-import-dialog(); }
+
+                                Text { text: "Cancel"; font-size: 14px; color: root.dark-mode ? Theme.text-dark : Theme.text-light; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+
+                        // Import button
+                        Rectangle {
+                            width: 120px;
+                            height: 40px;
+                            border-radius: 8px;
+                            background: Theme.accent;
+
+                            TouchArea {
+                                clicked => { root.import-github(root.import-repo-url); root.close-import-dialog(); }
+
+                                Text { text: "Import"; font-size: 14px; color: white; horizontal-alignment: center; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
             }
         }
 

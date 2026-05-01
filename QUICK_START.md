@@ -78,7 +78,6 @@ Provides unified interface for:
 
 ### 2. Dependencies Updated
 - **Android**: JNI bindings for Java/Rust communication
-- **iOS**: Standard egui/eframe support
 - **All**: `dirs` crate for cross-platform directories
 
 ### 3. Build Configuration (`.cargo/config.toml`)
@@ -118,7 +117,7 @@ Defines linker and compiler settings for each target:
 - **Database**: Uses bundled SQLite - works on both platforms
 - **Networking**: Uses `reqwest` - fully supported on mobile
 - **File Storage**: Automatically uses platform-appropriate directories via `book_core::platform`
-- **UI**: egui handles platform differences automatically
+- **UI**: Slint handles platform differences for desktop
 - **Logging**: Different for each platform, all handled in `platform.rs`
 
 ## Common Issues

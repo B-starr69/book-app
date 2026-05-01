@@ -427,6 +427,5 @@ The build is configured via:
 
 - [Rust on Android](https://rust-lang.github.io/rustup/cross-compilation.html)
 - [Rust on iOS](https://github.com/TheMelody/rust_ios_demo)
-- [egui Platform Support](https://github.com/emilk/egui)
 - [Android NDK Documentation](https://developer.android.com/ndk)
 - [iOS Development Guide](https://developer.apple.com/ios/)

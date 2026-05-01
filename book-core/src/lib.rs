@@ -3,6 +3,7 @@ pub mod configurable_parser;
 pub mod database;
 pub mod defaults;
 pub mod getter;
+pub mod importer;
 pub mod models;
 pub mod platform;
 
@@ -15,3 +16,5 @@ pub use models::{
     SearchConfig, SearchResult, SearchResultMapping, SectionLayout, Source, SourceConfig,
     SourceWithConfig,
 };
+
+pub use importer::{import_from_github, check_for_updates};

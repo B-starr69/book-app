@@ -19,6 +19,10 @@ impl Database {
                 name TEXT NOT NULL,
                 discover_url TEXT,
                 books_url TEXT,
+                icon_url TEXT,
+                description TEXT,
+                origin_repo TEXT,
+                origin_commit TEXT,
                 config TEXT
                 )",
             [],
@@ -349,14 +353,16 @@ impl Database {
     /// Insert or update a source (without config, for backward compatibility)
     pub fn save_source(&self, source: &Source) -> Result<()> {
         self.connection.execute(
-            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, (SELECT config FROM sources WHERE id = ?1))",
+            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, icon_url, description, config)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT config FROM sources WHERE id = ?1))",
             params![
                 source.id,
                 source.url,
                 source.name,
                 source.discover_url,
-                source.books_url
+                source.books_url,
+                source.icon_url,
+                source.description
             ],
         )?;
         Ok(())
@@ -366,14 +372,16 @@ impl Database {
     pub fn save_source_with_config(&self, source: &SourceWithConfig) -> Result<()> {
         let config_json = serde_json::to_string(&source.config).unwrap_or_default();
         self.connection.execute(
-            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, icon_url, description, config)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 source.id,
                 source.url,
                 source.name,
                 source.discover_url,
                 source.books_url,
+                source.icon_url,
+                source.description,
                 config_json
             ],
         )?;
@@ -390,6 +398,15 @@ impl Database {
         Ok(())
     }
 
+    /// Update the origin repository and commit SHA for a source
+    pub fn update_source_origin(&self, source_id: &str, origin_repo: &str, origin_commit: &str) -> Result<()> {
+        self.connection.execute(
+            "UPDATE sources SET origin_repo = ?1, origin_commit = ?2 WHERE id = ?3",
+            params![origin_repo, origin_commit, source_id],
+        )?;
+        Ok(())
+    }
+
     /// Delete a source (cascades to books and chapters)
     pub fn delete_source(&self, id: &str) -> Result<usize> {
         self.connection
@@ -399,7 +416,7 @@ impl Database {
     /// Return a source by id (without config)
     pub fn get_source(&self, id: &str) -> Result<Option<Source>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, discover_url, books_url FROM sources WHERE id = ?1",
+            "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit FROM sources WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], |row| {
             Ok(Source {
@@ -408,6 +425,8 @@ impl Database {
                 name: row.get(2)?,
                 discover_url: row.get(3).unwrap_or_default(),
                 books_url: row.get(4).unwrap_or_default(),
+                icon_url: row.get::<_, Option<String>>(5)?,
+                description: row.get::<_, Option<String>>(6)?,
             })
         })?;
         if let Some(r) = rows.next() {
@@ -419,10 +438,10 @@ impl Database {
     /// Return a source with its config by id
     pub fn get_source_with_config(&self, id: &str) -> Result<Option<SourceWithConfig>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, discover_url, books_url, config FROM sources WHERE id = ?1",
+            "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit, config FROM sources WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], |row| {
-            let config_json: Option<String> = row.get(5).ok();
+            let config_json: Option<String> = row.get(9).ok();
             let config: SourceConfig = config_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default();
@@ -432,6 +451,8 @@ impl Database {
                 name: row.get(2)?,
                 discover_url: row.get(3).unwrap_or_default(),
                 books_url: row.get(4).unwrap_or_default(),
+                icon_url: row.get::<_, Option<String>>(5)?,
+                description: row.get::<_, Option<String>>(6)?,
                 config,
             })
         })?;
@@ -443,7 +464,7 @@ impl Database {
 
     /// Get all sources (without configs, for listing)
     pub fn get_sources(&self) -> Result<Vec<Source>> {
-        let sql: &str = "SELECT id, url, name, discover_url, books_url FROM sources";
+        let sql: &str = "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit FROM sources";
         let mut stmt = self.connection.prepare(sql)?;
 
         let source_iter = stmt.query_map([], |row| {
@@ -453,6 +474,8 @@ impl Database {
                 name: row.get(2)?,
                 discover_url: row.get(3).unwrap_or_default(),
                 books_url: row.get(4).unwrap_or_default(),
+                icon_url: row.get::<_, Option<String>>(5)?,
+                description: row.get::<_, Option<String>>(6)?,
             })
         })?;
 
@@ -461,11 +484,11 @@ impl Database {
 
     /// Get all sources with their configs
     pub fn get_sources_with_config(&self) -> Result<Vec<SourceWithConfig>> {
-        let sql = "SELECT id, url, name, discover_url, books_url, config FROM sources";
+        let sql = "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit, config FROM sources";
         let mut stmt = self.connection.prepare(sql)?;
 
         let source_iter = stmt.query_map([], |row| {
-            let config_json: Option<String> = row.get(5).ok();
+            let config_json: Option<String> = row.get(7).ok();
             let config: SourceConfig = config_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default();
@@ -475,11 +498,26 @@ impl Database {
                 name: row.get(2)?,
                 discover_url: row.get(3).unwrap_or_default(),
                 books_url: row.get(4).unwrap_or_default(),
+                icon_url: row.get::<_, Option<String>>(5)?,
+                description: row.get::<_, Option<String>>(6)?,
                 config,
             })
         })?;
 
         source_iter.collect()
+    }
+
+    /// Get sources that were imported from a specific origin repository
+    pub fn get_sources_by_origin(&self, origin_repo: &str) -> Result<Vec<(String, Option<String>)>> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT id, origin_commit FROM sources WHERE origin_repo = ?1")?;
+
+        let rows = stmt.query_map(params![origin_repo], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+
+        rows.collect()
     }
 
     // ==================== Chapter Content Cache ====================

@@ -21,6 +21,7 @@ pub enum Message {
     Error(String),
     BookAdded(Book),
     BookRemoved { book_id: String },
+    ImportResult(Vec<String>),
 }
 
 /// Cover cache helper functions
@@ -150,6 +151,8 @@ impl BookApp {
                 name: "NovelFire".to_string(),
                 discover_url: "https://novelfire.net/home".to_string(),
                 books_url: "https://novelfire.net/book/".to_string(),
+                icon_url: None,
+                description: None,
             };
             if let Some(ref db) = *database {
                 let _ = db.save_source(&default_source);
@@ -300,6 +303,53 @@ impl BookApp {
             }
         });
 
+        // Manage sources callback - show import dialog
+        let ui_manage = ui.as_weak();
+        ui.on_manage_sources(move || {
+            if let Some(ui) = ui_manage.upgrade() {
+                ui.set_show_import_dialog(true);
+            }
+        });
+
+        // Close import dialog
+        let ui_close = ui.as_weak();
+        ui.on_close_import_dialog(move || {
+            if let Some(ui) = ui_close.upgrade() {
+                ui.set_show_import_dialog(false);
+                ui.set_import_repo_url(SharedString::from(""));
+            }
+        });
+
+        // Import from GitHub callback
+        let msg_tx_import = msg_tx.clone();
+        let sources_import = Arc::clone(&sources);
+        ui.on_import_github(move |repo_url| {
+            let tx = msg_tx_import.clone();
+            let sources = Arc::clone(&sources_import);
+            std::thread::spawn(move || {
+                // Create DB and call async importer
+                if let Ok(db) = Database::new() {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let repo = repo_url.to_string();
+                    match rt.block_on(async { book_core::import_from_github(&repo, &db).await }) {
+                        Ok(imported) => {
+                            // Reload sources from DB
+                            if let Ok(new_sources) = db.get_sources() {
+                                let mut s = sources.write().unwrap();
+                                *s = new_sources;
+                            }
+                            let _ = tx.send(Message::ImportResult(imported));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Message::Error(format!("Import failed: {}", e)));
+                        }
+                    }
+                } else {
+                    let _ = tx.send(Message::Error("Database not available".to_string()));
+                }
+            });
+        });
+
         // Open book callback
         let msg_tx_book = msg_tx.clone();
         let sources_book = Arc::clone(&sources);
@@ -326,6 +376,8 @@ impl BookApp {
                             name: source.name.clone(),
                             discover_url: source.discover_url.clone(),
                             books_url: source.books_url.clone(),
+                            icon_url: None,
+                            description: None,
                             config: book_core::models::SourceConfig::default(),
                         };
                         if let Some(details) = book_core::api::get_book_details(&source_cfg, book_id.clone()).await {
@@ -395,6 +447,8 @@ impl BookApp {
                             name: source.name.clone(),
                             discover_url: source.discover_url.clone(),
                             books_url: source.books_url.clone(),
+                            icon_url: None,
+                            description: None,
                             config: book_core::models::SourceConfig::default(),
                         };
                         if let Some(chapter) = book_core::api::get_chapter_content(&source_cfg, book_id.clone(), chapter_id.clone()).await {
@@ -474,6 +528,8 @@ impl BookApp {
                             name: source.name.clone(),
                             discover_url: source.discover_url.clone(),
                             books_url: source.books_url.clone(),
+                            icon_url: None,
+                            description: None,
                             config: book_core::models::SourceConfig::default(),
                         };
                         if let Some(results) = book_core::api::search_books(&source_cfg, &query).await {
@@ -594,6 +650,15 @@ impl BookApp {
             }
             Message::Error(err) => {
                 ui.set_error_message(SharedString::from(err));
+                ui.set_is_loading(false);
+            }
+            Message::ImportResult(ids) => {
+                if ids.is_empty() {
+                    ui.set_error_message(SharedString::from("No sources were imported."));
+                } else {
+                    let summary = ids.join(", ");
+                    ui.set_error_message(SharedString::from(format!("Imported sources: {}", summary)));
+                }
                 ui.set_is_loading(false);
             }
         }
