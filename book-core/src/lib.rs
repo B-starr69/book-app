@@ -1,7 +1,6 @@
 pub mod api;
 pub mod configurable_parser;
 pub mod database;
-pub mod defaults;
 pub mod getter;
 pub mod importer;
 pub mod models;

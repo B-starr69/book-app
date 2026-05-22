@@ -59,18 +59,7 @@ impl Downloader {
         match parser.parse_book_details(&html, book_id.clone()) {
             Ok(mut details) => {
                 // If using chapter template, fetch actual titles from paginated pages
-                if source.config.details.chapter_id_template.is_some() && details.chapters_count > 0 {
-                    let chapters_with_titles = self.fetch_chapter_titles_incremental(
-                        source,
-                        &book_id,
-                        &parser,
-                        details.chapters_count,
-                        cached_data,
-                    ).await;
-                    if !chapters_with_titles.is_empty() {
-                        details.chapters = chapters_with_titles;
-                    }
-                } else if details.chapters.is_empty() {
+                if details.chapters.is_empty() {
                     // If no chapters found, try fetching from separate chapters page
                     let chapters_url = format!(
                         "{}/{}/chapters",
@@ -102,81 +91,7 @@ impl Downloader {
         new_chapters_count: i32,
         cached_data: Option<(i32, std::collections::HashMap<i32, String>)>,
     ) -> Vec<crate::models::ParsedChapterInfo> {
-        let template = match &source.config.details.chapter_id_template {
-            Some(t) => t.clone(),
-            None => return vec![],
-        };
-
-        let chapters_per_page = 100;
-
-        // Determine what we already have cached
-        let (cached_count, all_titles) = cached_data.unwrap_or((0, std::collections::HashMap::new()));
-
-        // If no new chapters, just return what we have
-        if new_chapters_count <= cached_count && !all_titles.is_empty() {
-            println!("[CHAPTERS] No new chapters (cached: {}, new: {}), using cache", cached_count, new_chapters_count);
-            return (1..=new_chapters_count)
-                .map(|n| crate::models::ParsedChapterInfo {
-                    id: template.replace("{n}", &n.to_string()),
-                    title: all_titles.get(&n).cloned().unwrap_or_else(|| format!("Chapter {}", n)),
-                    date: None,
-                })
-                .collect();
-        }
-
-        // Calculate which pages we need to fetch
-        // Only fetch pages that contain chapters we don't have
-        let first_new_chapter = cached_count + 1;
-        let start_page = ((first_new_chapter - 1) / chapters_per_page) + 1;
-        let total_pages = ((new_chapters_count - 1) / chapters_per_page) + 1;
-
-        println!(
-            "[CHAPTERS] Incremental fetch: cached={}, new={}, fetching pages {}-{}",
-            cached_count, new_chapters_count, start_page, total_pages
-        );
-
-        let mut all_titles = all_titles;
-
-        // Fetch only the pages with new chapters
-        for page in start_page..=total_pages {
-            let chapters_url = if page == 1 {
-                format!("{}/{}/chapters", source.books_url.trim_end_matches('/'), book_id)
-            } else {
-                format!("{}/{}/chapters?page={}", source.books_url.trim_end_matches('/'), book_id, page)
-            };
-
-            println!("[CHAPTERS] Fetching page {}: {}", page, chapters_url);
-
-            if let Ok(resp) = self.client.get(&chapters_url).send().await {
-                if let Ok(chapters_html) = resp.text().await {
-                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
-                        // Calculate what chapters should be on this page
-                        let start_ch = (page - 1) * chapters_per_page + 1;
-
-                        // Map the chapters from this page to their actual chapter numbers
-                        for (idx, ch) in chapters.into_iter().enumerate() {
-                            let actual_chapter_num = start_ch + idx as i32;
-                            if actual_chapter_num <= new_chapters_count {
-                                // Only add if we don't have it cached
-                                if !all_titles.contains_key(&actual_chapter_num) {
-                                    println!("[CHAPTERS] Adding chapter {}: {}", actual_chapter_num, ch.title);
-                                    all_titles.insert(actual_chapter_num, ch.title);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Generate chapters with template IDs but actual titles
-        (1..=new_chapters_count)
-            .map(|n| crate::models::ParsedChapterInfo {
-                id: template.replace("{n}", &n.to_string()),
-                title: all_titles.get(&n).cloned().unwrap_or_else(|| format!("Chapter {}", n)),
-                date: None,
-            })
-            .collect()
+        vec![]
     }
 
     /// Get book metadata only (no chapters) - returns immediately
@@ -211,28 +126,17 @@ impl Downloader {
     ) {
         let parser = ConfigurableParser::new(source.config.clone());
 
-        // If using chapter template, stream from paginated chapters pages
-        if source.config.details.chapter_id_template.is_some() && chapters_count > 0 {
-            self.fetch_chapter_titles_streaming(
-                source,
-                book_id,
-                &parser,
-                chapters_count,
-                chapters_tx,
-            ).await;
-        } else {
-            // Try fetching from separate chapters page
-            let chapters_url = format!(
-                "{}/{}/chapters",
-                source.books_url.trim_end_matches('/'),
-                book_id
-            );
+        // Try fetching from separate chapters page
+        let chapters_url = format!(
+            "{}/{}/chapters",
+            source.books_url.trim_end_matches('/'),
+            book_id
+        );
 
-            if let Ok(resp) = self.client.get(&chapters_url).send().await {
-                if let Ok(chapters_html) = resp.text().await {
-                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
-                        let _ = chapters_tx.send(chapters);
-                    }
+        if let Ok(resp) = self.client.get(&chapters_url).send().await {
+            if let Ok(chapters_html) = resp.text().await {
+                if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
+                    let _ = chapters_tx.send(chapters);
                 }
             }
         }
@@ -247,69 +151,6 @@ impl Downloader {
         chapters_count: i32,
         chapters_tx: std::sync::mpsc::Sender<Vec<crate::models::ParsedChapterInfo>>,
     ) {
-        let template = match &source.config.details.chapter_id_template {
-            Some(t) => t.clone(),
-            None => return,
-        };
-
-        let chapters_per_page = 100;
-        let total_pages = ((chapters_count - 1) / chapters_per_page) + 1;
-
-        println!(
-            "[CHAPTERS STREAMING] Total chapters: {}, pages: {}",
-            chapters_count, total_pages
-        );
-
-        for page in 1..=total_pages {
-            let chapters_url = if page == 1 {
-                format!("{}/{}/chapters", source.books_url.trim_end_matches('/'), book_id)
-            } else {
-                format!("{}/{}/chapters?page={}", source.books_url.trim_end_matches('/'), book_id, page)
-            };
-
-            println!("[CHAPTERS STREAMING] Fetching page {}: {}", page, chapters_url);
-
-            if let Ok(resp) = self.client.get(&chapters_url).send().await {
-                if let Ok(chapters_html) = resp.text().await {
-                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
-                        // Calculate what chapters should be on this page
-                        let start_ch = (page - 1) * chapters_per_page + 1;
-                        let end_ch = (page * chapters_per_page).min(chapters_count);
-
-                        println!("[CHAPTERS STREAMING] Page {} should have chapters {}-{}, got {} chapters from HTML",
-                                 page, start_ch, end_ch, chapters.len());
-
-                        // Map the chapters from this page to their actual chapter numbers
-                        let page_chapters: Vec<crate::models::ParsedChapterInfo> = chapters
-                            .into_iter()
-                            .enumerate()
-                            .filter_map(|(idx, ch)| {
-                                let actual_chapter_num = start_ch + idx as i32;
-                                if actual_chapter_num <= chapters_count {
-                                    Some(crate::models::ParsedChapterInfo {
-                                        id: template.replace("{n}", &actual_chapter_num.to_string()),
-                                        title: ch.title,
-                                        date: ch.date,
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-
-                        println!("[CHAPTERS STREAMING] Sending {} chapters (numbers {}-{})",
-                                 page_chapters.len(), start_ch, start_ch + page_chapters.len() as i32 - 1);
-
-                        // Send this page of chapters
-                        if chapters_tx.send(page_chapters).is_err() {
-                            // Receiver dropped, stop fetching
-                            println!("[CHAPTERS STREAMING] Receiver dropped, stopping");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     pub async fn load_home(&self, source: &SourceWithConfig) -> Option<Vec<HomeSection>> {

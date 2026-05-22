@@ -136,37 +136,7 @@ pub struct DbChapter {
 /// Configuration for parsing a source's home/discover page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HomeSelectors {
-    /// CSS selector for section containers
-    pub section: String,
-    /// CSS selector for section title/header
-    pub header: String,
-    /// CSS selector for book items within a section
-    pub item: String,
-    /// CSS selector for links within items
-    pub link: String,
-    /// Regex pattern to extract book ID from href (capture group 1)
-    pub book_id_pattern: String,
-    /// Optional: attribute to get href from (default: "href")
-    #[serde(default = "default_href_attr")]
-    pub href_attr: String,
-    /// Optional: CSS selector for cover image within items
-    #[serde(default)]
-    pub cover: String,
-    /// Optional: attribute to get cover URL from (default: "src")
-    #[serde(default = "default_src_attr")]
-    pub cover_attr: String,
-    /// Optional: alternative cover attribute (e.g., "data-src")
-    #[serde(default)]
-    pub cover_attr_alt: Option<String>,
-    /// Optional: CSS selector for title element within items
-    #[serde(default)]
-    pub title: String,
-    /// Optional: attribute to get title from (default: text content, or use "title" for attribute)
-    #[serde(default)]
-    pub title_attr: Option<String>,
-    /// Optional: mapping of section titles to layouts
-    #[serde(default)]
-    pub layout_mapping: Vec<LayoutMapping>,
+    pub script: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -178,47 +148,13 @@ pub struct LayoutMapping {
 /// Configuration for parsing book details page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DetailsSelectors {
-    pub title: String,
-    pub author: String,
-    pub cover: String,
-    /// Attribute to get cover URL from (default: "src")
-    #[serde(default = "default_src_attr")]
-    pub cover_attr: String,
-    /// Alternative cover attribute (e.g., "data-src")
-    #[serde(default)]
-    pub cover_attr_alt: Option<String>,
-    pub rating: String,
-    pub status: String,
-    pub chapters_count: String,
-    pub genres: String,
-    pub summary: String,
-    /// Selector for chapter list items
-    pub chapter_list: String,
-    /// Regex pattern to extract chapter ID from href
-    pub chapter_id_pattern: String,
-    /// Optional: selector for chapter date
-    #[serde(default)]
-    pub chapter_date: Option<String>,
-    /// Optional: attribute for chapter date
-    #[serde(default)]
-    pub chapter_date_attr: Option<String>,
-    /// Optional: template for generating chapter IDs (e.g., "chapter-{n}")
-    /// When set, chapters are generated using chapters_count instead of parsing HTML
-    #[serde(default)]
-    pub chapter_id_template: Option<String>,
+    pub script: String,
 }
 
 /// Configuration for parsing chapter content page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChapterSelectors {
-    pub title: String,
-    pub content: String,
-    /// Optional: selector for chapter date
-    #[serde(default)]
-    pub date: Option<String>,
-    /// Optional: attribute for date (for meta tags)
-    #[serde(default)]
-    pub date_attr: Option<String>,
+    pub script: String,
 }
 
 /// Configuration for search functionality

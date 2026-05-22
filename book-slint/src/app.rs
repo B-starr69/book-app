@@ -3,7 +3,7 @@
 // ============================================================================
 
 use crate::{App, BookData, ChapterData, SectionData, SearchResultData, ViewState};
-use book_core::{Book, Chapter, Database, HomeSection, SearchResult, Source};
+use book_core::{Book, Chapter, Database, HomeSection, SearchResult, SourceConfig, SourceWithConfig};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel, Image, Rgba8Pixel, SharedPixelBuffer};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, RwLock};
@@ -139,13 +139,13 @@ impl BookApp {
 
         // Load sources
         let mut sources = if let Some(ref db) = *database {
-            db.get_sources().unwrap_or_default()
+            db.get_sources_with_config().unwrap_or_default()
         } else {
             vec![]
         };
 
         if sources.is_empty() {
-            let default_source = Source {
+            let default_source = SourceWithConfig {
                 id: "novelfire".to_string(),
                 url: "https://novelfire.net".to_string(),
                 name: "NovelFire".to_string(),
@@ -153,9 +153,10 @@ impl BookApp {
                 books_url: "https://novelfire.net/book/".to_string(),
                 icon_url: None,
                 description: None,
+                config: SourceConfig::default(),
             };
             if let Some(ref db) = *database {
-                let _ = db.save_source(&default_source);
+                let _ = db.save_source_with_config(&default_source);
             }
             sources.push(default_source);
         }
@@ -247,7 +248,7 @@ impl BookApp {
     fn setup_callbacks(
         ui: &App,
         msg_tx: Sender<Message>,
-        sources: Arc<RwLock<Vec<Source>>>,
+        sources: Arc<RwLock<Vec<SourceWithConfig>>>,
         _database: Arc<Option<Database>>,
         current_book_state: Arc<RwLock<Option<Book>>>,
     ) {
@@ -281,23 +282,11 @@ impl BookApp {
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        // TODO: Implement streaming in API, falling back to dummy for now
-                        let (section_tx, section_rx) = std::sync::mpsc::channel::<HomeSection>();
-                        let tx_clone = tx.clone();
-
-                        std::thread::spawn(move || {
-                            while let Ok(section) = section_rx.recv() {
-                                let _ = tx_clone.send(Message::DiscoverSectionAdded(section));
-                            }
-                        });
-
-                        // Fake discover sections for now to prevent compile errors
-                        let fake_section = HomeSection {
-                            title: "Discover".to_string(),
-                            layout: book_core::models::SectionLayout::Grid,
-                            books: vec![]
-                        };
-                        let _ = section_tx.send(fake_section);
+                        if let Some(sections) = book_core::api::get_discover_page(source).await {
+                            let _ = tx.send(Message::DiscoverLoaded(sections));
+                        } else {
+                            let _ = tx.send(Message::Error("Discover failed".to_string()));
+                        }
                     });
                 });
             }
@@ -334,7 +323,7 @@ impl BookApp {
                     match rt.block_on(async { book_core::import_from_github(&repo, &db).await }) {
                         Ok(imported) => {
                             // Reload sources from DB
-                            if let Ok(new_sources) = db.get_sources() {
+                            if let Ok(new_sources) = db.get_sources_with_config() {
                                 let mut s = sources.write().unwrap();
                                 *s = new_sources;
                             }
@@ -357,7 +346,7 @@ impl BookApp {
             let tx = msg_tx_book.clone();
             let sources = sources_book.read().unwrap().clone();
             let book_id = book_id.to_string();
-                        if let Some(source) = sources.first().cloned() {
+            if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     // Check cache first
                     if let Ok(db) = Database::new() {
@@ -370,17 +359,7 @@ impl BookApp {
                     // Fetch from network
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        let source_cfg = book_core::models::SourceWithConfig {
-                            id: source.id.clone(),
-                            url: source.url.clone(),
-                            name: source.name.clone(),
-                            discover_url: source.discover_url.clone(),
-                            books_url: source.books_url.clone(),
-                            icon_url: None,
-                            description: None,
-                            config: book_core::models::SourceConfig::default(),
-                        };
-                        if let Some(details) = book_core::api::get_book_details(&source_cfg, book_id.clone()).await {
+                        if let Some(details) = book_core::api::get_book_details(&source, book_id.clone()).await {
                             let book = Book {
                                 id: book_id.clone(),
                                 source_id: source.id.clone(),
@@ -436,22 +415,12 @@ impl BookApp {
             let sources = sources_chapter.read().unwrap().clone();
             let book_id = book_id.to_string();
             let chapter_id = chapter_id.to_string();
-                        if let Some(source) = sources.first().cloned() {
+            if let Some(source) = sources.first().cloned() {
                 std::thread::spawn(move || {
                     // Fetch from network
                     let rt = tokio::runtime::Runtime::new().unwrap();
                     rt.block_on(async {
-                        let source_cfg = book_core::models::SourceWithConfig {
-                            id: source.id.clone(),
-                            url: source.url.clone(),
-                            name: source.name.clone(),
-                            discover_url: source.discover_url.clone(),
-                            books_url: source.books_url.clone(),
-                            icon_url: None,
-                            description: None,
-                            config: book_core::models::SourceConfig::default(),
-                        };
-                        if let Some(chapter) = book_core::api::get_chapter_content(&source_cfg, book_id.clone(), chapter_id.clone()).await {
+                        if let Some(chapter) = book_core::api::get_chapter_content(&source, book_id.clone(), chapter_id.clone()).await {
                             let _ = tx.send(Message::ChapterContentLoaded {
                                 content: chapter.content,
                                 book_id,
@@ -522,17 +491,7 @@ impl BookApp {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     if let Some(source) = sources.first() {
-                        let source_cfg = book_core::models::SourceWithConfig {
-                            id: source.id.clone(),
-                            url: source.url.clone(),
-                            name: source.name.clone(),
-                            discover_url: source.discover_url.clone(),
-                            books_url: source.books_url.clone(),
-                            icon_url: None,
-                            description: None,
-                            config: book_core::models::SourceConfig::default(),
-                        };
-                        if let Some(results) = book_core::api::search_books(&source_cfg, &query).await {
+                        if let Some(results) = book_core::api::search_books(source, &query).await {
                             let _ = tx.send(Message::SearchResults(results));
                         }
                     }
