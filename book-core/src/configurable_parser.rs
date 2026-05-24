@@ -1,5 +1,5 @@
 use crate::models::{
-    HomeSection, LayoutMapping, ParsedBookDetails, ParsedChapter, ParsedChapterInfo,
+    HomeSection, LayoutMapping, ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult,
     SectionLayout, SourceConfig,
 };
 use regex::Regex;
@@ -26,12 +26,13 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = &self.config.home.script;
+            let script = self.config.home.script.as_deref().unwrap_or("");
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let parse_home_fn: Function = globals.get("parseHome").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let function_name = self.config.home.js_function.as_deref().unwrap_or("parseHome");
+            let parse_home_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_home_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let sections: Vec<HomeSection> = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -52,12 +53,13 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = &self.config.home.script;
+            let script = self.config.home.script.as_deref().unwrap_or("");
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let parse_home_fn: Function = globals.get("parseHome").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let function_name = self.config.home.js_function.as_deref().unwrap_or("parseHome");
+            let parse_home_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_home_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let sections: Vec<HomeSection> = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -79,12 +81,18 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = &self.config.details.script;
+            let script = self.config.details.script.as_deref().unwrap_or("");
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let parse_details_fn: Function = globals.get("parseBookDetails").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let function_name = self
+                .config
+                .details
+                .js_function
+                .as_deref()
+                .unwrap_or("parseBookDetails");
+            let parse_details_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_details_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let mut details: ParsedBookDetails = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -99,12 +107,18 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = &self.config.details.script; // Assuming chapters are part of details script
+            let script = self.config.details.script.as_deref().unwrap_or("");
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let parse_chapters_fn: Function = globals.get("parseChapters").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let function_name = self
+                .config
+                .details
+                .js_function
+                .as_deref()
+                .unwrap_or("parseChapters");
+            let parse_chapters_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_chapters_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let chapters: Vec<ParsedChapterInfo> = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -119,17 +133,53 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = &self.config.chapter.script;
+            let script = self.config.chapter.script.as_deref().unwrap_or("");
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let parse_content_fn: Function = globals.get("parseChapterContent").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let function_name = self
+                .config
+                .chapter
+                .js_function
+                .as_deref()
+                .unwrap_or("parseChapterContent");
+            let parse_content_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_content_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
             let chapter: ParsedChapter = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             Ok(chapter)
+        })
+    }
+
+    pub fn parse_search_results(&self, payload: &str) -> Result<Vec<SearchResult>> {
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+
+        ctx.with(|ctx| {
+            let script = self
+                .config
+                .search
+                .as_ref()
+                .and_then(|search| search.script.as_deref())
+                .unwrap_or("");
+            ctx.eval::<(), _>(script.as_bytes())
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            let globals = ctx.globals();
+            let function_name = self
+                .config
+                .search
+                .as_ref()
+                .and_then(|search| search.js_function.as_deref())
+                .unwrap_or("parseSearch");
+            let parse_search_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            let value: Value = parse_search_fn.call((payload,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let results: Vec<SearchResult> = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            Ok(results)
         })
     }
 }

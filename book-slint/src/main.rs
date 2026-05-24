@@ -11,8 +11,6 @@ use app::BookApp;
 fn main() -> Result<(), slint::PlatformError> {
     // Initialize platform-specific logging
     book_core::platform::init_logging();
-
-    // Create and run the app
     let app = BookApp::new()?;
     app.run()
 }

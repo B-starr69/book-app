@@ -1,11 +1,11 @@
 use crate::database::Database;
-use crate::models::SourceWithConfig;
+use crate::models::{
+    ActionEngine, ChapterSelectors, DetailsSelectors, HomeSelectors, SearchConfig, SourceConfig,
+    SourceWithConfig,
+};
 use anyhow::{anyhow, Result};
 use reqwest::header::{ACCEPT, USER_AGENT};
 use url::Url;
-
-// QuickJS integration
-use rquickjs::{Context, Runtime};
 
 /// Metadata file structure stored in metadata.json
 #[derive(Debug, serde::Deserialize)]
@@ -23,6 +23,8 @@ struct RepoSource {
     author: Option<String>,
     #[serde(default)]
     search: Option<serde_json::Value>,
+    #[serde(default)]
+    config: Option<serde_json::Value>,
 }
 
 /// Import sources from a GitHub repository's `sources/` directory.
@@ -100,12 +102,47 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
                             continue;
                         }
                     };
-                    let config_json = serde_json::json!({
-                        "home": { "script": index_js_txt.clone().unwrap_or_default() },
-                        "details": { "script": index_js_txt.clone().unwrap_or_default() },
-                        "chapter": { "script": index_js_txt.clone().unwrap_or_default() },
-                        "search": meta.search,
-                    });
+                    let config = if let Some(config_value) = meta.config.clone() {
+                        serde_json::from_value::<SourceConfig>(config_value).unwrap_or_default()
+                    } else if index_js_txt.is_some() {
+                        let search = meta
+                            .search
+                            .and_then(|value| serde_json::from_value::<SearchConfig>(value).ok())
+                            .map(|mut search| {
+                                search.engine = ActionEngine::Js;
+                                if search.js_function.is_none() {
+                                    search.js_function = Some("parseSearch".to_string());
+                                }
+                                search.script = None;
+                                search
+                            });
+
+                        SourceConfig {
+                            version: 1,
+                            script_path: Some("index.js".to_string()),
+                            home: HomeSelectors {
+                                engine: ActionEngine::Js,
+                                js_function: Some("parseHome".to_string()),
+                                script: None,
+                                ..Default::default()
+                            },
+                            details: DetailsSelectors {
+                                engine: ActionEngine::Js,
+                                js_function: Some("parseBookDetails".to_string()),
+                                script: None,
+                                ..Default::default()
+                            },
+                            chapter: ChapterSelectors {
+                                engine: ActionEngine::Js,
+                                js_function: Some("parseChapterContent".to_string()),
+                                script: None,
+                                ..Default::default()
+                            },
+                            search,
+                        }
+                    } else {
+                        Default::default()
+                    };
 
                     let src = SourceWithConfig {
                         id: dir_name.to_string(),
@@ -115,7 +152,7 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
                         books_url: meta.books_url.clone(),
                         icon_url: meta.icon_url.clone(),
                         description: meta.description.clone(),
-                        config: serde_json::from_value(config_json).unwrap(),
+                        config,
                     };
                     let _ = db.save_source_with_config(&src);
                     imported.push(src.id.clone());
@@ -131,18 +168,4 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
 /// Returns a vector of (source_id, needs_update, current_sha, latest_sha)
 pub async fn check_for_updates(repo_url: &str, db: &Database) -> Result<Vec<(String, bool, Option<String>, Option<String>)>> {
     Ok(vec![])
-}
-
-
-/// Very small QuickJS runner that exposes limited host functions
-fn run_quickjs_script(js: &str) -> Result<(), anyhow::Error> {
-    // Create runtime and context
-    let rt = Runtime::new().map_err(|e| anyhow!("quickjs runtime error: {}", e))?;
-    let ctx = Context::full(&rt).map_err(|e| anyhow!("quickjs context error: {}", e))?;
-
-    ctx.with(|ctx| {
-        // Simple execution of the script for prototype (no host API yet)
-        ctx.eval::<(), _>(js)?;
-        Ok(())
-    })
 }

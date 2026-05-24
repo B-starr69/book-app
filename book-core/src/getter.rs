@@ -1,6 +1,12 @@
 use crate::configurable_parser::ConfigurableParser;
-use crate::models::{HomeSection, ParsedBookDetails, ParsedChapter, SearchResult, SourceWithConfig};
+use crate::models::{
+    ActionEngine, HomeSection, ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult,
+    SourceConfig, SourceWithConfig,
+};
+use crate::native_parser::NativeParser;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
+use std::path::PathBuf;
+use tokio::fs;
 
 pub struct Downloader {
     client: reqwest::Client,
@@ -15,9 +21,12 @@ impl Default for Downloader {
 impl Downloader {
     pub fn new() -> Self {
         let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        ));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            ),
+        );
         headers.insert(
             ACCEPT,
             HeaderValue::from_static(
@@ -42,135 +51,128 @@ impl Downloader {
         self.get_book_from_web_with_cache(source, book_id, None).await
     }
 
-    /// Get book details with optional cached data for incremental updates
-    /// If cached_chapters is provided, only fetches new chapters since last sync
     pub async fn get_book_from_web_with_cache(
         &self,
         source: &SourceWithConfig,
         book_id: String,
-        cached_data: Option<(i32, std::collections::HashMap<i32, String>)>, // (cached_count, cached_titles)
+        _cached_data: Option<(i32, std::collections::HashMap<i32, String>)>,
     ) -> Option<ParsedBookDetails> {
-        let parser = ConfigurableParser::new(source.config.clone());
         let url = format!("{}/{}", source.books_url.trim_end_matches('/'), book_id);
-
         let resp = self.client.get(&url).send().await.ok()?;
         let html = resp.text().await.ok()?;
 
-        match parser.parse_book_details(&html, book_id.clone()) {
-            Ok(mut details) => {
-                // If using chapter template, fetch actual titles from paginated pages
-                if details.chapters.is_empty() {
-                    // If no chapters found, try fetching from separate chapters page
-                    let chapters_url = format!(
-                        "{}/{}/chapters",
-                        source.books_url.trim_end_matches('/'),
-                        book_id
-                    );
-
-                    if let Ok(resp) = self.client.get(&chapters_url).send().await {
-                        if let Ok(chapters_html) = resp.text().await {
-                            if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
-                                details.chapters = chapters;
-                            }
-                        }
-                    }
-                }
-
-                Some(details)
+        match source.config.details.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
+                self.finish_book_details_rust(&parser, source, book_id, &html)
+                    .await
             }
-            Err(_) => None,
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                self.finish_book_details_js(&parser, source, book_id, &html)
+                    .await
+            }
         }
     }
 
-    /// Fetch chapter titles incrementally - only fetches pages with new chapters
-    async fn fetch_chapter_titles_incremental(
-        &self,
-        source: &SourceWithConfig,
-        book_id: &str,
-        parser: &ConfigurableParser,
-        new_chapters_count: i32,
-        cached_data: Option<(i32, std::collections::HashMap<i32, String>)>,
-    ) -> Vec<crate::models::ParsedChapterInfo> {
-        vec![]
-    }
-
-    /// Get book metadata only (no chapters) - returns immediately
     pub async fn get_book_metadata_only(
         &self,
         source: &SourceWithConfig,
         book_id: String,
     ) -> Option<ParsedBookDetails> {
-        let parser = ConfigurableParser::new(source.config.clone());
         let url = format!("{}/{}", source.books_url.trim_end_matches('/'), book_id);
-
         let resp = self.client.get(&url).send().await.ok()?;
         let html = resp.text().await.ok()?;
 
-        match parser.parse_book_details(&html, book_id.clone()) {
-            Ok(mut details) => {
-                // Return metadata only, chapters will be streamed separately
-                details.chapters = vec![];
+        match source.config.details.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
+                let mut details = parser.parse_book_details(&html, book_id).ok()?;
+                details.chapters.clear();
                 Some(details)
             }
-            Err(_) => None,
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                let mut details = parser.parse_book_details(&html, book_id).ok()?;
+                details.chapters.clear();
+                Some(details)
+            }
         }
     }
 
-    /// Stream chapters in background - call after metadata is loaded
     pub async fn stream_chapters(
         &self,
         source: &SourceWithConfig,
         book_id: &str,
-        chapters_count: i32,
-        chapters_tx: std::sync::mpsc::Sender<Vec<crate::models::ParsedChapterInfo>>,
+        _chapters_count: i32,
+        chapters_tx: std::sync::mpsc::Sender<Vec<ParsedChapterInfo>>,
     ) {
-        let parser = ConfigurableParser::new(source.config.clone());
-
-        // Try fetching from separate chapters page
         let chapters_url = format!(
             "{}/{}/chapters",
             source.books_url.trim_end_matches('/'),
             book_id
         );
 
-        if let Ok(resp) = self.client.get(&chapters_url).send().await {
-            if let Ok(chapters_html) = resp.text().await {
+        let resp = match self.client.get(&chapters_url).send().await {
+            Ok(resp) => resp,
+            Err(_) => return,
+        };
+        let chapters_html = match resp.text().await {
+            Ok(html) => html,
+            Err(_) => return,
+        };
+
+        match source.config.details.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
                 if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
                     let _ = chapters_tx.send(chapters);
+                }
+            }
+            ActionEngine::Js => {
+                if let Some(parser) = self.js_parser(source).await {
+                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
+                        let _ = chapters_tx.send(chapters);
+                    }
                 }
             }
         }
     }
 
-    /// Fetch chapter titles with streaming - sends each page of chapters as they're fetched
-    async fn fetch_chapter_titles_streaming(
-        &self,
-        source: &SourceWithConfig,
-        book_id: &str,
-        parser: &ConfigurableParser,
-        chapters_count: i32,
-        chapters_tx: std::sync::mpsc::Sender<Vec<crate::models::ParsedChapterInfo>>,
-    ) {
-    }
-
     pub async fn load_home(&self, source: &SourceWithConfig) -> Option<Vec<HomeSection>> {
-        let parser = ConfigurableParser::new(source.config.clone());
         let resp = self.client.get(&source.discover_url).send().await.ok()?;
         let html = resp.text().await.ok()?;
-        parser.parse_home(&html, &source.url).ok()
+
+        match source.config.home.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
+                parser.parse_home(&html, &source.url).ok()
+            }
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                parser.parse_home(&html, &source.url).ok()
+            }
+        }
     }
 
-    /// Load home page with streaming - sends each section via channel as it's parsed
-    /// Returns the total number of sections found
     pub async fn load_home_streaming(
         &self,
         source: &SourceWithConfig,
         section_tx: std::sync::mpsc::Sender<HomeSection>,
     ) -> Option<usize> {
-        let parser = ConfigurableParser::new(source.config.clone());
         let resp = self.client.get(&source.discover_url).send().await.ok()?;
         let html = resp.text().await.ok()?;
-        parser.parse_home_streaming(&html, &source.url, section_tx).ok()
+
+        match source.config.home.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
+                parser.parse_home_streaming(&html, &source.url, section_tx).ok()
+            }
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                parser.parse_home_streaming(&html, &source.url, section_tx).ok()
+            }
+        }
     }
 
     pub async fn get_chapter_from_web(
@@ -179,51 +181,109 @@ impl Downloader {
         book_id: String,
         chapter_id: String,
     ) -> Option<ParsedChapter> {
-        let parser = ConfigurableParser::new(source.config.clone());
         let url = format!(
             "{}/{}/{}",
             source.books_url.trim_end_matches('/'),
             book_id,
             chapter_id
         );
-        println!("Fetching chapter from URL: {}", url);
+
         let resp = self.client.get(&url).send().await.ok()?;
-        let status = resp.status();
-        println!("Response status: {}", status);
         let html = resp.text().await.ok()?;
-        println!("Got HTML, length: {}", html.len());
-        let result = parser.parse_chapter_content(&html);
-        match &result {
-            Ok(chapter) => println!("Parsed chapter: title={}, content_len={}", chapter.title, chapter.content.len()),
-            Err(e) => println!("Parse error: {}", e),
+
+        match source.config.chapter.effective_engine() {
+            ActionEngine::Rust => {
+                let parser = NativeParser::new(source.config.clone());
+                parser.parse_chapter_content(&html).ok()
+            }
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                parser.parse_chapter_content(&html).ok()
+            }
         }
-        result.ok()
     }
 
-    /// Search books using the source's search configuration
     pub async fn search_books(
         &self,
         source: &SourceWithConfig,
         keyword: &str,
     ) -> Option<Vec<SearchResult>> {
         let search_config = source.config.search.as_ref()?;
-
-        // URL-encode the keyword
         let encoded_keyword = urlencoding::encode(keyword);
         let url = search_config.url_pattern.replace("{keyword}", &encoded_keyword);
 
-        println!("[SEARCH] URL: {}", url);
-
         let resp = self.client.get(&url).send().await.ok()?;
-        let status = resp.status();
-        println!("[SEARCH] Response status: {}", status);
 
-        if search_config.response_type == "json" {
-            self.parse_json_search_results(resp, search_config).await
-        } else {
-            // HTML parsing would go here if needed
-            self.parse_html_search_results(resp, source, search_config).await
+        match search_config.effective_engine() {
+            ActionEngine::Rust => {
+                if search_config.response_type == "json" {
+                    self.parse_json_search_results(resp, search_config).await
+                } else {
+                    self.parse_html_search_results(resp, source, search_config).await
+                }
+            }
+            ActionEngine::Js => {
+                let parser = self.js_parser(source).await?;
+                let payload = resp.text().await.ok()?;
+                parser.parse_search_results(&payload).ok()
+            }
         }
+    }
+
+    async fn finish_book_details_rust(
+        &self,
+        parser: &NativeParser,
+        source: &SourceWithConfig,
+        book_id: String,
+        html: &str,
+    ) -> Option<ParsedBookDetails> {
+        let mut details = parser.parse_book_details(html, book_id.clone()).ok()?;
+
+        if details.chapters.is_empty() {
+            let chapters_url = format!(
+                "{}/{}/chapters",
+                source.books_url.trim_end_matches('/'),
+                book_id
+            );
+
+            if let Ok(resp) = self.client.get(&chapters_url).send().await {
+                if let Ok(chapters_html) = resp.text().await {
+                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
+                        details.chapters = chapters;
+                    }
+                }
+            }
+        }
+
+        Some(details)
+    }
+
+    async fn finish_book_details_js(
+        &self,
+        parser: &ConfigurableParser,
+        source: &SourceWithConfig,
+        book_id: String,
+        html: &str,
+    ) -> Option<ParsedBookDetails> {
+        let mut details = parser.parse_book_details(html, book_id.clone()).ok()?;
+
+        if details.chapters.is_empty() {
+            let chapters_url = format!(
+                "{}/{}/chapters",
+                source.books_url.trim_end_matches('/'),
+                book_id
+            );
+
+            if let Ok(resp) = self.client.get(&chapters_url).send().await {
+                if let Ok(chapters_html) = resp.text().await {
+                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
+                        details.chapters = chapters;
+                    }
+                }
+            }
+        }
+
+        Some(details)
     }
 
     async fn parse_json_search_results(
@@ -233,7 +293,6 @@ impl Downloader {
     ) -> Option<Vec<SearchResult>> {
         let json: serde_json::Value = resp.json().await.ok()?;
 
-        // Navigate to results array using the path (e.g., "data" or "results.items")
         let results_array = if search_config.json_results_path.is_empty() {
             json.as_array()?
         } else {
@@ -251,7 +310,6 @@ impl Downloader {
                 let id = item.get(&mapping.id)?.as_str()?.to_string();
                 let title = item.get(&mapping.title)?.as_str()?.to_string();
 
-                // Build cover URL (may need base URL prepended)
                 let cover_url = item
                     .get(&mapping.cover)
                     .and_then(|v| v.as_str())
@@ -266,9 +324,6 @@ impl Downloader {
                     })
                     .unwrap_or_default();
 
-                println!("[SEARCH] Book: {} -> Cover URL: {}", title, cover_url);
-
-                // Optional: chapters count
                 let chapters_count = if !mapping.chapters_count.is_empty() {
                     item.get(&mapping.chapters_count)
                         .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
@@ -288,7 +343,6 @@ impl Downloader {
             })
             .collect();
 
-        println!("[SEARCH] Found {} results", results.len());
         Some(results)
     }
 
@@ -298,8 +352,8 @@ impl Downloader {
         source: &SourceWithConfig,
         search_config: &crate::models::SearchConfig,
     ) -> Option<Vec<SearchResult>> {
-        use scraper::{Html, Selector};
         use regex::Regex;
+        use scraper::{Html, Selector};
 
         let html = resp.text().await.ok()?;
         let document = Html::parse_document(&html);
@@ -326,7 +380,6 @@ impl Downloader {
         let results: Vec<SearchResult> = document
             .select(&item_sel)
             .filter_map(|item| {
-                // Extract ID from link href
                 let id = if let Some(ref lsel) = link_sel {
                     let link = item.select(lsel).next()?;
                     let href = link.value().attr("href")?;
@@ -339,19 +392,28 @@ impl Downloader {
                     return None;
                 };
 
-                let title = item.select(&title_sel).next()?.text().collect::<String>().trim().to_string();
+                let title = item
+                    .select(&title_sel)
+                    .next()?
+                    .text()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
 
-                let cover_url = cover_sel.as_ref().and_then(|sel| {
-                    let img = item.select(sel).next()?;
-                    let src = img.value().attr("src").or_else(|| img.value().attr("data-src"))?;
-                    if src.starts_with("http") {
-                        Some(src.to_string())
-                    } else if !search_config.cover_base_url.is_empty() {
-                        Some(format!("{}{}", search_config.cover_base_url, src))
-                    } else {
-                        Some(format!("{}{}", source.url, src))
-                    }
-                }).unwrap_or_default();
+                let cover_url = cover_sel
+                    .as_ref()
+                    .and_then(|sel| {
+                        let img = item.select(sel).next()?;
+                        let src = img.value().attr("src").or_else(|| img.value().attr("data-src"))?;
+                        if src.starts_with("http") {
+                            Some(src.to_string())
+                        } else if !search_config.cover_base_url.is_empty() {
+                            Some(format!("{}{}", search_config.cover_base_url, src))
+                        } else {
+                            Some(format!("{}{}", source.url, src))
+                        }
+                    })
+                    .unwrap_or_default();
 
                 Some(SearchResult {
                     id,
@@ -364,7 +426,71 @@ impl Downloader {
             })
             .collect();
 
-        println!("[SEARCH] Found {} results from HTML", results.len());
         Some(results)
+    }
+
+    async fn js_parser(&self, source: &SourceWithConfig) -> Option<ConfigurableParser> {
+        let config = self.prepare_js_config(source).await?;
+        Some(ConfigurableParser::new(config))
+    }
+
+    async fn prepare_js_config(&self, source: &SourceWithConfig) -> Option<SourceConfig> {
+        let mut config = source.config.clone();
+        let needs_file = matches!(config.home.effective_engine(), ActionEngine::Js)
+            && config.home.script.is_none()
+            || matches!(config.details.effective_engine(), ActionEngine::Js)
+                && config.details.script.is_none()
+            || matches!(config.chapter.effective_engine(), ActionEngine::Js)
+                && config.chapter.script.is_none()
+            || config
+                .search
+                .as_ref()
+                .map(|search| matches!(search.effective_engine(), ActionEngine::Js) && search.script.is_none())
+                .unwrap_or(false);
+
+        let file_script = if needs_file {
+            Some(self.load_js_script(source).await?)
+        } else {
+            None
+        };
+
+        if matches!(config.home.effective_engine(), ActionEngine::Js) && config.home.script.is_none() {
+            config.home.script = file_script.clone();
+        }
+        if matches!(config.details.effective_engine(), ActionEngine::Js) && config.details.script.is_none() {
+            config.details.script = file_script.clone();
+        }
+        if matches!(config.chapter.effective_engine(), ActionEngine::Js) && config.chapter.script.is_none() {
+            config.chapter.script = file_script.clone();
+        }
+        if let Some(search) = config.search.as_mut() {
+            if matches!(search.effective_engine(), ActionEngine::Js) && search.script.is_none() {
+                search.script = file_script;
+            }
+        }
+
+        Some(config)
+    }
+
+    async fn load_js_script(&self, source: &SourceWithConfig) -> Option<String> {
+        let script_path = source
+            .config
+            .script_path
+            .as_deref()
+            .unwrap_or("index.js");
+
+        let resolved = Self::resolve_script_path(source, script_path);
+        fs::read_to_string(resolved).await.ok()
+    }
+
+    fn resolve_script_path(source: &SourceWithConfig, script_path: &str) -> PathBuf {
+        let path = PathBuf::from(script_path);
+        if path.is_absolute() {
+            path
+        } else if path.components().count() == 1 && script_path == "index.js" {
+            PathBuf::from("sources").join(&source.id).join(path)
+        } else {
+            path
+        }
     }
 }

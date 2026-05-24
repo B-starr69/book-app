@@ -144,7 +144,7 @@ impl BookApp {
             vec![]
         };
 
-        if sources.is_empty() {
+/*         if sources.is_empty() {
             let default_source = SourceWithConfig {
                 id: "novelfire".to_string(),
                 url: "https://novelfire.net".to_string(),
@@ -159,7 +159,7 @@ impl BookApp {
                 let _ = db.save_source_with_config(&default_source);
             }
             sources.push(default_source);
-        }
+        } */
 
         let sources = Arc::new(RwLock::new(sources));
 
@@ -313,6 +313,7 @@ impl BookApp {
         let msg_tx_import = msg_tx.clone();
         let sources_import = Arc::clone(&sources);
         ui.on_import_github(move |repo_url| {
+            println!("{}",repo_url);
             let tx = msg_tx_import.clone();
             let sources = Arc::clone(&sources_import);
             std::thread::spawn(move || {

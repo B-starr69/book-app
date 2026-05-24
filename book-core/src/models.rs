@@ -135,8 +135,68 @@ pub struct DbChapter {
 
 /// Configuration for parsing a source's home/discover page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionEngine {
+    #[default]
+    Rust,
+    Js,
+}
+
+/// Configuration for parsing a source's home/discover page
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HomeSelectors {
-    pub script: String,
+    #[serde(default)]
+    pub engine: ActionEngine,
+    #[serde(default)]
+    pub js_function: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
+    /// CSS selector for section containers
+    #[serde(default)]
+    pub section: String,
+    /// CSS selector for section title/header
+    #[serde(default)]
+    pub header: String,
+    /// CSS selector for book items within a section
+    #[serde(default)]
+    pub item: String,
+    /// CSS selector for links within items
+    #[serde(default)]
+    pub link: String,
+    /// Regex pattern to extract book ID from href (capture group 1)
+    #[serde(default)]
+    pub book_id_pattern: String,
+    /// Optional: attribute to get href from (default: "href")
+    #[serde(default = "default_href_attr")]
+    pub href_attr: String,
+    /// Optional: CSS selector for cover image within items
+    #[serde(default)]
+    pub cover: String,
+    /// Optional: attribute to get cover URL from (default: "src")
+    #[serde(default = "default_src_attr")]
+    pub cover_attr: String,
+    /// Optional: alternative cover attribute (e.g., "data-src")
+    #[serde(default)]
+    pub cover_attr_alt: Option<String>,
+    /// Optional: CSS selector for title element within items
+    #[serde(default)]
+    pub title: String,
+    /// Optional: attribute to get title from (default: text content, or use "title" for attribute)
+    #[serde(default)]
+    pub title_attr: Option<String>,
+    /// Optional: mapping of section titles to layouts
+    #[serde(default)]
+    pub layout_mapping: Vec<LayoutMapping>,
+}
+
+impl HomeSelectors {
+    pub fn effective_engine(&self) -> ActionEngine {
+        if matches!(self.engine, ActionEngine::Js) || self.script.is_some() || self.js_function.is_some() {
+            ActionEngine::Js
+        } else {
+            ActionEngine::Rust
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -148,19 +208,104 @@ pub struct LayoutMapping {
 /// Configuration for parsing book details page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DetailsSelectors {
-    pub script: String,
+    #[serde(default)]
+    pub engine: ActionEngine,
+    #[serde(default)]
+    pub js_function: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub cover: String,
+    /// Attribute to get cover URL from (default: "src")
+    #[serde(default = "default_src_attr")]
+    pub cover_attr: String,
+    /// Alternative cover attribute (e.g., "data-src")
+    #[serde(default)]
+    pub cover_attr_alt: Option<String>,
+    #[serde(default)]
+    pub rating: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub chapters_count: String,
+    #[serde(default)]
+    pub genres: String,
+    #[serde(default)]
+    pub summary: String,
+    /// Selector for chapter list items
+    #[serde(default)]
+    pub chapter_list: String,
+    /// Regex pattern to extract chapter ID from href
+    #[serde(default)]
+    pub chapter_id_pattern: String,
+    /// Optional: selector for chapter date
+    #[serde(default)]
+    pub chapter_date: Option<String>,
+    /// Optional: attribute for chapter date
+    #[serde(default)]
+    pub chapter_date_attr: Option<String>,
+    /// Optional: template for generating chapter IDs (e.g., "chapter-{n}")
+    /// When set, chapters are generated using chapters_count instead of parsing HTML
+    #[serde(default)]
+    pub chapter_id_template: Option<String>,
+}
+
+impl DetailsSelectors {
+    pub fn effective_engine(&self) -> ActionEngine {
+        if matches!(self.engine, ActionEngine::Js) || self.script.is_some() || self.js_function.is_some() {
+            ActionEngine::Js
+        } else {
+            ActionEngine::Rust
+        }
+    }
 }
 
 /// Configuration for parsing chapter content page
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChapterSelectors {
-    pub script: String,
+    #[serde(default)]
+    pub engine: ActionEngine,
+    #[serde(default)]
+    pub js_function: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+    /// Optional: selector for chapter date
+    #[serde(default)]
+    pub date: Option<String>,
+    /// Optional: attribute for date (for meta tags)
+    #[serde(default)]
+    pub date_attr: Option<String>,
+}
+
+impl ChapterSelectors {
+    pub fn effective_engine(&self) -> ActionEngine {
+        if matches!(self.engine, ActionEngine::Js) || self.script.is_some() || self.js_function.is_some() {
+            ActionEngine::Js
+        } else {
+            ActionEngine::Rust
+        }
+    }
 }
 
 /// Configuration for search functionality
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchConfig {
+    #[serde(default)]
+    pub engine: ActionEngine,
+    #[serde(default)]
+    pub js_function: Option<String>,
+    #[serde(default)]
+    pub script: Option<String>,
     /// URL pattern with {keyword} placeholder, e.g., "https://example.com/search?q={keyword}"
+    #[serde(default)]
     pub url_pattern: String,
     /// Response type: "json" or "html"
     #[serde(default = "default_response_type")]
@@ -176,12 +321,24 @@ pub struct SearchConfig {
     pub cover_base_url: String,
 }
 
+impl SearchConfig {
+    pub fn effective_engine(&self) -> ActionEngine {
+        if matches!(self.engine, ActionEngine::Js) || self.script.is_some() || self.js_function.is_some() {
+            ActionEngine::Js
+        } else {
+            ActionEngine::Rust
+        }
+    }
+}
+
 /// Mapping for extracting book data from search results
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchResultMapping {
     /// JSON field or CSS selector for book ID/slug
+    #[serde(default)]
     pub id: String,
     /// JSON field or CSS selector for book title
+    #[serde(default)]
     pub title: String,
     /// JSON field or CSS selector for cover image URL
     #[serde(default)]
@@ -207,6 +364,10 @@ fn default_response_type() -> String {
 /// Complete source configuration stored in database
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceConfig {
+    #[serde(default = "default_source_config_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub script_path: Option<String>,
     pub home: HomeSelectors,
     pub details: DetailsSelectors,
     pub chapter: ChapterSelectors,
@@ -223,6 +384,10 @@ fn default_src_attr() -> String {
     "src".to_string()
 }
 
+fn default_source_config_version() -> u32 {
+    1
+}
+
 /// Extended Source with embedded config
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceWithConfig {
@@ -236,4 +401,21 @@ pub struct SourceWithConfig {
     #[serde(default)]
     pub description: Option<String>,
     pub config: SourceConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_script_config_infers_js_engine() {
+        let home: HomeSelectors = serde_json::from_str(r#"{"script":"function parseHome() {}"}"#).unwrap();
+        assert!(matches!(home.effective_engine(), ActionEngine::Js));
+
+        let details: DetailsSelectors = serde_json::from_str(r#"{"script":"function parseBookDetails() {}"}"#).unwrap();
+        assert!(matches!(details.effective_engine(), ActionEngine::Js));
+
+        let chapter: ChapterSelectors = serde_json::from_str(r#"{"script":"function parseChapterContent() {}"}"#).unwrap();
+        assert!(matches!(chapter.effective_engine(), ActionEngine::Js));
+    }
 }
