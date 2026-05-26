@@ -6,6 +6,7 @@ export component BookDetailsView inherits Rectangle {
     in property <bool> is-loading;
     in property <bool> dark-mode: true;
     in property <string> summary;
+    in property <image> cover-image;
 
     callback go-back();
     callback add-to-library();
@@ -68,7 +69,7 @@ export component BookDetailsView inherits Rectangle {
         // Content
         Flickable {
             vertical-stretch: 1;
-            viewport-height: 800px;  // Will adjust based on content
+            viewport-height: 300px + chapters.length * 56px;
 
             VerticalLayout {
                 padding: Theme.spacing-md;
@@ -85,7 +86,14 @@ export component BookDetailsView inherits Rectangle {
                         border-radius: Theme.radius-md;
                         background: Theme.accent.transparentize(0.85);
 
-                        Text {
+                        if cover-image.width > 0 && cover-image.height > 0 : Image {
+                            source: cover-image;
+                            width: parent.width;
+                            height: parent.height;
+                            image-fit: cover;
+                        }
+
+                        if cover-image.width == 0 || cover-image.height == 0 : Text {
                             text: "📚";
                             font-size: 48px;
                             horizontal-alignment: center;

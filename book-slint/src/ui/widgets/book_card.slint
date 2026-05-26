@@ -27,8 +27,8 @@ export component BookCard inherits Rectangle {
                 background: Theme.accent.transparentize(0.85);
                 clip: true;
 
-                if book.cover-url != "" : Image {
-                    source: @image-url("");  // Placeholder - cover loading handled separately
+                if book.cover-image.width > 0 && book.cover-image.height > 0 : Image {
+                    source: book.cover-image;
                     width: 100%;
                     height: 100%;
                     image-fit: cover;
@@ -53,17 +53,19 @@ export component BookCard inherits Rectangle {
             // Title area
             Rectangle {
                 height: 30px;
-                padding-left: 6px;
-                padding-right: 6px;
-                padding-top: 4px;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    padding-top: 4px;
 
-                Text {
-                    text: book.title;
-                    font-size: 11px;
-                    font-weight: 600;
-                    color: dark-mode ? Theme.text-dark : Theme.text-light;
-                    overflow: elide;
-                    horizontal-alignment: left;
+                    Text {
+                        text: book.title;
+                        font-size: 11px;
+                        font-weight: 600;
+                        color: dark-mode ? Theme.text-dark : Theme.text-light;
+                        overflow: elide;
+                        horizontal-alignment: left;
+                    }
                 }
             }
         }

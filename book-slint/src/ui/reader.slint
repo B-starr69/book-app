@@ -104,6 +104,11 @@ export component ReaderView inherits Rectangle {
         content-area := Flickable {
             vertical-stretch: 1;
             viewport-height: content-text.preferred-height + 64px;
+            viewport-y: self.viewport-height > self.height ? -((self.viewport-height - self.height) * progress) : 0;
+
+            flicked => {
+                root.save-progress(self.viewport-height > self.height ? (-self.viewport-y / (self.viewport-height - self.height)) : 0);
+            }
 
             content-text := Text {
                 x: 16px;

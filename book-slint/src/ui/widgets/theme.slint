@@ -40,9 +40,11 @@ export global Theme {
 // Data structures
 export struct BookData {
     id: string,
+    source-id: string,
     title: string,
     author: string,
     cover-url: string,
+    cover-image: image,
     progress: float,
     chapters-count: int,
     in-library: bool,
@@ -62,8 +64,10 @@ export struct SectionData {
 
 export struct SearchResultData {
     id: string,
+    source-id: string,
     title: string,
     cover-url: string,
+    cover-image: image,
     source-name: string,
 }
 

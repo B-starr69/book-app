@@ -1,0 +1,86 @@
+{
+  "name": "NovelFire",
+  "url": "https://novelfire.net",
+  "discoverUrl": "https://novelfire.net/home",
+  "booksUrl": "https://novelfire.net/book",
+  "iconUrl": null,
+  "description": "NovelFire source",
+  "version": "1.0.0",
+  "author": "Example Author",
+  "config": {
+    "version": 1,
+    "home": {
+      "engine": "rust",
+      "js_function": null,
+      "script": null,
+      "section": "section.container",
+      "header": ".section-header h3",
+      "item": ".novel-item",
+      "link": "a",
+      "book_id_pattern": "/book/([^/?#]+)",
+      "href_attr": "href",
+      "cover": "img",
+      "cover_attr": "src",
+      "cover_attr_alt": "data-src",
+      "title": "h4.novel-title",
+      "title_attr": null,
+      "layout_mapping": [
+        {
+          "title_contains": "Recommend",
+          "layout": "horizontal"
+        },
+        {
+          "title_contains": "Ranking",
+          "layout": "ranking"
+        }
+      ]
+    },
+    "details": {
+      "engine": "rust",
+      "js_function": null,
+      "script": null,
+      "title": ".novel-title",
+      "author": ".author span[itemprop='author']",
+      "cover": ".fixed-img .cover img",
+      "cover_attr": "src",
+      "cover_attr_alt": "data-src",
+      "rating": ".rating .nub",
+      "status": ".header-stats .completed, .header-stats .ongoing",
+      "chapters_count": ".header-stats span strong",
+      "genres": ".categories ul li a",
+      "summary": ".summary .content",
+      "chapter_list": "ul.chapter-list li a",
+      "chapter_id_pattern": "/book/[^/]+/([^/?#]+)",
+      "chapter_date": "time.chapter-update",
+      "chapter_date_attr": null,
+      "chapter_id_template": "chapter-{n}"
+    },
+    "chapter": {
+      "engine": "rust",
+      "js_function": null,
+      "script": null,
+      "title": ".chapter-title",
+      "content": "#content",
+      "date": null,
+      "date_attr": null
+    },
+    "search": {
+      "engine": "rust",
+      "js_function": null,
+      "script": null,
+      "url_pattern": "https://novelfire.net/ajax/searchLive?keyword={keyword}&type=title",
+      "response_type": "json",
+      "json_results_path": "data",
+      "mapping": {
+        "id": "slug",
+        "title": "title",
+        "cover": "image",
+        "chapters_count": "total_chapter",
+        "item_selector": "",
+        "link_selector": "",
+        "id_pattern": ""
+      },
+      "cover_base_url": "https://novelfire.net/"
+    }
+  }
+}

@@ -30,6 +30,7 @@ export component App inherits Window {
     in-out property <BookData> current-book;
     in-out property <[ChapterData]> book-chapters: [];
     in-out property <string> book-summary;
+    in-out property <image> current-book-cover;
     in-out property <string> chapter-content;
     in-out property <string> chapter-title;
     in-out property <string> current-chapter-id;
@@ -94,7 +95,6 @@ export component App inherits Window {
             // Settings View
             if current-view == ViewState.Settings : SettingsView {
                 dark-mode: root.dark-mode;
-                dark-mode-enabled: root.dark-mode;
                 toggle-dark-mode => { root.dark-mode = !root.dark-mode; }
                 manage-sources => { root.manage-sources(); }
                 clear-cache => { root.clear-cache(); }
@@ -105,6 +105,7 @@ export component App inherits Window {
                 book: current-book;
                 chapters: book-chapters;
                 summary: book-summary;
+                cover-image: root.current-book-cover;
                 is-loading: root.is-loading;
                 dark-mode: root.dark-mode;
                 go-back => { root.current-view = ViewState.Library; }
@@ -119,7 +120,7 @@ export component App inherits Window {
                 content: chapter-content;
                 dark-mode: root.dark-mode;
                 font-size <=> root.reader-font-size;
-                progress <=> root.reader-progress;
+                progress: root.reader-progress;
                 go-back => { root.current-view = ViewState.BookDetails; }
                 prev-chapter => { root.prev-chapter(); }
                 next-chapter => { root.next-chapter(); }

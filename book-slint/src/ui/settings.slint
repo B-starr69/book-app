@@ -2,7 +2,6 @@ import { Theme } from "widgets/theme.slint";
 
 export component SettingsView inherits Rectangle {
     in property <bool> dark-mode: true;
-    in-out property <bool> dark-mode-enabled: true;
 
     callback toggle-dark-mode();
     callback manage-sources();
@@ -57,7 +56,6 @@ export component SettingsView inherits Rectangle {
                     TouchArea {
                         width: 50px;
                         clicked => {
-                            dark-mode-enabled = !dark-mode-enabled;
                             root.toggle-dark-mode();
                         }
 
@@ -65,10 +63,10 @@ export component SettingsView inherits Rectangle {
                             width: 50px;
                             height: 28px;
                             border-radius: 14px;
-                            background: dark-mode-enabled ? Theme.accent : Theme.text-muted-light;
+                            background: dark-mode ? Theme.accent : Theme.text-muted-light;
 
                             Rectangle {
-                                x: dark-mode-enabled ? parent.width - self.width - 2px : 2px;
+                                x: dark-mode ? parent.width - self.width - 2px : 2px;
                                 y: 2px;
                                 width: 24px;
                                 height: 24px;

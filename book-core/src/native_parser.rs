@@ -360,6 +360,8 @@ impl NativeParser {
             }
         });
 
+        let content = sanitize_chapter_html(&content);
+
         Ok(ParsedChapter {
             title,
             content,
@@ -416,5 +418,42 @@ fn determine_layout(title: &str, mappings: &[LayoutMapping]) -> SectionLayout {
         }
     }
     SectionLayout::Grid
+}
+
+fn sanitize_chapter_html(html: &str) -> String {
+    let ad_re = Regex::new(r"(?is)<!--\s*END\s+AADS\s+AD\s+UNIT\s+\d+\s*--\s*>").unwrap();
+    let mut text = ad_re.replace_all(html, "").to_string();
+
+    for (from, to) in [
+        ("<br>", "\n"),
+        ("<br/>", "\n"),
+        ("<br />", "\n"),
+        ("</p>", "\n\n"),
+        ("</div>", "\n"),
+        ("</li>", "\n"),
+        ("</h1>", "\n\n"),
+        ("</h2>", "\n\n"),
+        ("</h3>", "\n\n"),
+        ("</h4>", "\n\n"),
+        ("</h5>", "\n\n"),
+        ("</h6>", "\n\n"),
+    ] {
+        text = text.replace(from, to);
+    }
+
+    let tag_re = Regex::new(r"(?is)<[^>]+>").unwrap();
+    text = tag_re.replace_all(&text, "").to_string();
+
+    text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'");
+
+    let line_re = Regex::new(r"\n{3,}").unwrap();
+    line_re.replace_all(text.trim(), "\n\n").to_string()
 }
 

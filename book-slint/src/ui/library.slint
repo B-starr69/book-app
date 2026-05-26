@@ -117,13 +117,13 @@ export component LibraryView inherits Rectangle {
         // Book grid
         if !is-loading && books.length > 0 : Flickable {
             vertical-stretch: 1;
-            viewport-height: self.height;  // Will be calculated based on content
+            viewport-height: ((books.length + 2) / 3) * 186px;
 
-            // Grid of books (using HorizontalLayout with wrapping simulation)
+            // Grid of books
             VerticalLayout {
                 spacing: Theme.spacing-md;
 
-                for row in 10 : HorizontalLayout {
+                for row in ((books.length + 2) / 3) : HorizontalLayout {
                     spacing: Theme.spacing-md;
 
                     for col in 3 : Rectangle {

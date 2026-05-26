@@ -64,6 +64,12 @@ impl Database {
             [],
         )?;
 
+        // Normalize any negative progress values (older versions may have used -1 as sentinel)
+        let _ = connection.execute(
+            "UPDATE chapters SET progress = CASE WHEN progress < 0 AND last_read IS NOT NULL AND last_read > 0 THEN 1.0 WHEN progress < 0 THEN 0.0 ELSE progress END",
+            [],
+        );
+
 
 
         connection.execute(
@@ -92,6 +98,35 @@ impl Database {
 
         // Migration: Add last_synced column to books if it doesn't exist
         let _ = connection.execute("ALTER TABLE books ADD COLUMN last_synced INTEGER", []);
+
+        // Also normalize chapters stored inside books.chapters_json where necessary
+        if let Ok(mut stmt) = connection.prepare("SELECT id, source_id, chapters_json FROM books WHERE chapters_json LIKE '%\"progress\":-1%'") {
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                let id: String = row.get(0)?;
+                let source_id: String = row.get(1)?;
+                let chapters_json: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                if !chapters_json.is_empty() {
+                    if let Ok(mut chapters) = serde_json::from_str::<Vec<crate::models::Chapter>>(&chapters_json) {
+                        let mut changed = false;
+                        for ch in chapters.iter_mut() {
+                            if ch.progress < 0.0 {
+                                ch.progress = if ch.last_read > 0 { 1.0 } else { 0.0 };
+                                changed = true;
+                            }
+                        }
+                        if changed {
+                            if let Ok(new_json) = serde_json::to_string(&chapters) {
+                                let _ = connection.execute(
+                                    "UPDATE books SET chapters_json = ?1 WHERE id = ?2 AND source_id = ?3",
+                                    params![new_json, id, source_id],
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(Database { connection })
     }
@@ -488,7 +523,7 @@ impl Database {
         let mut stmt = self.connection.prepare(sql)?;
 
         let source_iter = stmt.query_map([], |row| {
-            let config_json: Option<String> = row.get(7).ok();
+            let config_json: Option<String> = row.get(9).ok();
             let config: SourceConfig = config_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default();

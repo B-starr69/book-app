@@ -147,7 +147,8 @@ impl ConfigurableParser {
             let parse_content_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_content_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            let chapter: ParsedChapter = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let mut chapter: ParsedChapter = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            chapter.content = sanitize_chapter_html(&chapter.content);
 
             Ok(chapter)
         })
@@ -234,6 +235,43 @@ fn determine_layout(title: &str, mappings: &[LayoutMapping]) -> SectionLayout {
         }
     }
     SectionLayout::Grid // default
+}
+
+fn sanitize_chapter_html(html: &str) -> String {
+    let ad_re = Regex::new(r"(?is)<!--\s*END\s+AADS\s+AD\s+UNIT\s+\d+\s*--\s*>").unwrap();
+    let mut text = ad_re.replace_all(html, "").to_string();
+
+    for (from, to) in [
+        ("<br>", "\n"),
+        ("<br/>", "\n"),
+        ("<br />", "\n"),
+        ("</p>", "\n\n"),
+        ("</div>", "\n"),
+        ("</li>", "\n"),
+        ("</h1>", "\n\n"),
+        ("</h2>", "\n\n"),
+        ("</h3>", "\n\n"),
+        ("</h4>", "\n\n"),
+        ("</h5>", "\n\n"),
+        ("</h6>", "\n\n"),
+    ] {
+        text = text.replace(from, to);
+    }
+
+    let tag_re = Regex::new(r"(?is)<[^>]+>").unwrap();
+    text = tag_re.replace_all(&text, "").to_string();
+
+    text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'");
+
+    let line_re = Regex::new(r"\n{3,}").unwrap();
+    line_re.replace_all(text.trim(), "\n\n").to_string()
 }
 
 #[cfg(test)]
