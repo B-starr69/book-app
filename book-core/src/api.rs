@@ -119,11 +119,6 @@ pub async fn get_cover_bytes_cached(
         return Some(bytes);
     }
 
-    println!(
-        "Downloading cover: source={} book={} url={}",
-        source_id, book_id, cover_url
-    );
-
     let resp = reqwest::get(cover_url).await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -154,11 +149,6 @@ pub fn get_cover_bytes_cached_blocking(
     if let Ok(Some(bytes)) = db.get_cached_cover(book_id, source_id) {
         return Some(bytes);
     }
-
-    println!(
-        "Downloading cover: source={} book={} url={}",
-        source_id, book_id, cover_url
-    );
 
     let mut headers = HeaderMap::new();
     headers.insert(

@@ -21,8 +21,10 @@ struct RepoSource {
     #[serde(rename = "iconUrl")]
     icon_url: Option<String>,
     description: Option<String>,
-    version: Option<String>,
-    author: Option<String>,
+    #[serde(rename = "version")]
+    _version: Option<String>,
+    #[serde(rename = "author")]
+    _author: Option<String>,
     #[serde(default)]
     search: Option<serde_json::Value>,
     #[serde(default)]
@@ -231,6 +233,6 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
 
 /// Check for updates in a GitHub repo for sources imported from that repo.
 /// Returns a vector of (source_id, needs_update, current_sha, latest_sha)
-pub async fn check_for_updates(repo_url: &str, db: &Database) -> Result<Vec<(String, bool, Option<String>, Option<String>)>> {
+pub async fn check_for_updates(_repo_url: &str, _db: &Database) -> Result<Vec<(String, bool, Option<String>, Option<String>)>> {
     Ok(vec![])
 }

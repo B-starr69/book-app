@@ -8,14 +8,33 @@ mod callbacks;
 mod cover_registry;
 
 use crate::{App, ViewState};
-use book_core::{Book, Database};
+use book_core::{Book, Database, SourceWithConfig};
 use messages::Message;
 use slint::{ComponentHandle, Image, SharedString};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
 
 pub struct BookApp {
     ui: App,
+}
+
+fn sync_discover_sources(ui: &App, sources: &[SourceWithConfig]) {
+    let items: Vec<crate::SourceData> = sources
+        .iter()
+        .map(|source| crate::SourceData {
+            id: SharedString::from(&source.id),
+            name: SharedString::from(&source.name),
+        })
+        .collect();
+    let current_selected = ui.get_selected_discover_source_id().to_string();
+    let selected = if sources.iter().any(|source| source.id == current_selected) {
+        current_selected
+    } else {
+        sources.first().map(|source| source.id.clone()).unwrap_or_default()
+    };
+    ui.set_discover_sources(slint::ModelRc::new(slint::VecModel::from(items)));
+    ui.set_selected_discover_source_id(SharedString::from(selected.as_str()));
 }
 
 
@@ -39,11 +58,42 @@ impl BookApp {
         } else {
             vec![]
         };
+        sync_discover_sources(&ui, &sources);
         let sources = Arc::new(RwLock::new(sources));
+        let library_books_state = Arc::new(RwLock::new(Vec::<Book>::new()));
+        let discover_sections_state = Arc::new(RwLock::new(Vec::<book_core::HomeSection>::new()));
+        let discover_source_id_state = Arc::new(RwLock::new(String::new()));
+        let search_results_state = Arc::new(RwLock::new(Vec::<book_core::SearchResult>::new()));
+
+        // Index maps to support O(1) lookups for incremental updates
+        let library_index_map = Arc::new(RwLock::new(HashMap::<String, usize>::new()));
+        let discover_index_map = Arc::new(RwLock::new(HashMap::<String, (usize, usize)>::new()));
+        let search_index_map = Arc::new(RwLock::new(HashMap::<String, usize>::new()));
 
         if let Some(ref db) = *database {
             if let Ok(books) = db.get_library_books() {
-                ui.set_library_books(models::books_to_model(&books));
+                // Populate library model, using cover_registry when possible to avoid re-decoding.
+                let mut items = Vec::new();
+                for book in books.iter() {
+                    let mut bd = models::book_to_slint(book);
+                    if let Some((rgba, width, height)) = cover_registry::get(&book.source_id, &book.id) {
+                        if let Some(img) = models::rgba_to_image(&rgba, width, height) {
+                            bd.cover_image = img;
+                        }
+                    }
+                    items.push(bd);
+                }
+                ui.set_library_books(slint::ModelRc::new(slint::VecModel::from(items)));
+                // keep a copy of the library books for UI updates when covers arrive
+                *library_books_state.write().unwrap() = books.clone();
+                // build index map
+                {
+                    let mut map = library_index_map.write().unwrap();
+                    map.clear();
+                    for (i, b) in books.iter().enumerate() {
+                        map.insert(b.id.clone(), i);
+                    }
+                }
                 let tx = msg_tx.clone();
                 for book in books.iter() {
                     load_cover_async(&tx, &book.source_id, &book.id, &book.cover_url, Arc::clone(&runtime));
@@ -60,18 +110,32 @@ impl BookApp {
             Arc::clone(&database),
             Arc::clone(&current_book_state),
             Arc::clone(&shared),
+            Arc::clone(&library_books_state),
+            Arc::clone(&discover_sections_state),
+            Arc::clone(&discover_source_id_state),
+            Arc::clone(&search_results_state),
+            Arc::clone(&library_index_map),
+            Arc::clone(&discover_index_map),
+            Arc::clone(&search_index_map),
         );
 
         let ui_weak = ui.as_weak();
         let timer = slint::Timer::default();
         let current_book_for_timer = Arc::clone(&current_book_state);
+        let library_books_for_timer = Arc::clone(&library_books_state);
+        let discover_sections_for_timer = Arc::clone(&discover_sections_state);
+        let discover_source_id_for_timer = Arc::clone(&discover_source_id_state);
+        let search_results_for_timer = Arc::clone(&search_results_state);
+        let library_index_for_timer = Arc::clone(&library_index_map);
+        let discover_index_for_timer = Arc::clone(&discover_index_map);
+        let search_index_for_timer = Arc::clone(&search_index_map);
         timer.start(
             slint::TimerMode::Repeated,
             std::time::Duration::from_millis(50),
             move || {
                 while let Ok(msg) = msg_rx.try_recv() {
                     if let Some(ui) = ui_weak.upgrade() {
-                        Self::handle_message(&ui, msg, &current_book_for_timer);
+                        Self::handle_message(&ui, msg, &sources, &current_book_for_timer, &library_books_for_timer, &discover_sections_for_timer, &discover_source_id_for_timer, &search_results_for_timer, &library_index_for_timer, &discover_index_for_timer, &search_index_for_timer);
                     }
                 }
             },
@@ -85,13 +149,49 @@ impl BookApp {
         self.ui.run()
     }
 
-    fn handle_message(ui: &App, msg: Message, current_book_state: &Arc<RwLock<Option<Book>>>) {
+        fn handle_message(
+        ui: &App,
+        msg: Message,
+        sources: &Arc<RwLock<Vec<SourceWithConfig>>>,
+        current_book_state: &Arc<RwLock<Option<Book>>>,
+        library_books_state: &Arc<RwLock<Vec<Book>>>,
+        discover_sections_state: &Arc<RwLock<Vec<book_core::HomeSection>>>,
+        discover_source_id_state: &Arc<RwLock<String>>,
+        search_results_state: &Arc<RwLock<Vec<book_core::SearchResult>>>,
+        library_index_map: &Arc<RwLock<HashMap<String, usize>>>,
+        discover_index_map: &Arc<RwLock<HashMap<String, (usize, usize)>>>,
+        search_index_map: &Arc<RwLock<HashMap<String, usize>>>,
+    ) {
         match msg {
             Message::LibraryLoaded(books) => {
                 ui.set_library_books(models::books_to_model(&books));
+                // keep a shared copy for cover updates
+                *library_books_state.write().unwrap() = books.clone();
+                // rebuild index map
+                {
+                    let mut map = library_index_map.write().unwrap();
+                    map.clear();
+                    for (i, b) in books.iter().enumerate() {
+                        map.insert(b.id.clone(), i);
+                    }
+                }
                 ui.set_is_loading(false);
             }
             Message::DiscoverLoaded { source_id, sections } => {
+                // save sections and source id for later incremental updates and set UI model (models will consult registry)
+                *discover_sections_state.write().unwrap() = sections.clone();
+                *discover_source_id_state.write().unwrap() = source_id.clone();
+                ui.set_selected_discover_source_id(SharedString::from(&source_id));
+                // rebuild discover index map (section_idx, book_idx)
+                {
+                    let mut map = discover_index_map.write().unwrap();
+                    map.clear();
+                    for (si, section) in sections.iter().enumerate() {
+                        for (bi, book) in section.books.iter().enumerate() {
+                            map.insert(book.id.clone(), (si, bi));
+                        }
+                    }
+                }
                 ui.set_discover_sections(models::sections_to_model(&sections, &source_id));
                 ui.set_is_loading(false);
             }
@@ -111,20 +211,29 @@ impl BookApp {
                 *current_book_state.write().unwrap() = Some(merged_book.clone());
                 ui.set_current_book(models::book_to_slint(&merged_book));
                 ui.set_book_chapters(models::chapters_to_model(&merged_book.chapters));
-                let cached_bytes = if let Ok(db) = Database::new() {
-                    db.get_cached_cover(&merged_book.id, &merged_book.source_id).ok().flatten()
-                } else {
-                    None
-                };
-
-                if let Some(bytes) = cached_bytes {
-                    if let Some(image) = models::bytes_to_image(&bytes) {
+                // Prefer in-memory registry (RGBA) to avoid decoding on UI thread
+                if let Some((rgba, w, h)) = cover_registry::get(&merged_book.source_id, &merged_book.id) {
+                    if let Some(image) = models::rgba_to_image(&rgba, w, h) {
                         ui.set_current_book_cover(image);
                     } else {
                         ui.set_current_book_cover(Image::default());
                     }
                 } else {
-                    ui.set_current_book_cover(Image::default());
+                    let cached_bytes = if let Ok(db) = Database::new() {
+                        db.get_cached_cover(&merged_book.id, &merged_book.source_id).ok().flatten()
+                    } else {
+                        None
+                    };
+
+                    if let Some(bytes) = cached_bytes {
+                        if let Some(image) = models::bytes_to_image(&bytes) {
+                            ui.set_current_book_cover(image);
+                        } else {
+                            ui.set_current_book_cover(Image::default());
+                        }
+                    } else {
+                        ui.set_current_book_cover(Image::default());
+                    }
                 }
                 ui.set_current_view(ViewState::BookDetails);
                 ui.set_is_loading(false);
@@ -154,7 +263,15 @@ impl BookApp {
                 ui.set_is_loading(false);
             }
             Message::SearchResults(results) => {
-                ui.set_search_results(models::search_results_to_model(&results));
+                *search_results_state.write().unwrap() = results.clone();
+                // rebuild search index map
+                {
+                    let mut map = search_index_map.write().unwrap();
+                    map.clear();
+                    for (i, r) in results.iter().enumerate() {
+                        map.insert(r.id.clone(), i);
+                    }
+                }
                 ui.set_is_searching(false);
             }
                     Message::CoverLoaded { source_id, book_id, image_data } => {
@@ -247,6 +364,9 @@ impl BookApp {
                 ui.set_is_loading(false);
             }
             Message::ImportResult(ids) => {
+                if let Ok(sources_guard) = sources.read() {
+                    sync_discover_sources(ui, &sources_guard);
+                }
                 if ids.is_empty() {
                     ui.set_error_message(SharedString::from("No sources were imported."));
                 } else {

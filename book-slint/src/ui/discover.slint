@@ -1,13 +1,42 @@
-import { Theme, BookData, SectionData } from "widgets/theme.slint";
+import { Theme, BookData, SectionData, SourceData } from "widgets/theme.slint";
 import { Section } from "widgets/section.slint";
+
+component SourceTab inherits Rectangle {
+    in property <bool> dark-mode: true;
+    in property <bool> selected: false;
+    in property <string> label;
+
+    callback clicked();
+
+    width: 104px;
+    height: 34px;
+    border-radius: 17px;
+    background: selected ? Theme.accent : (dark-mode ? Theme.card-dark : Theme.card-light);
+
+    TouchArea {
+        clicked => { root.clicked(); }
+
+        Text {
+            text: label;
+            font-size: 12px;
+            font-weight: 600;
+            color: selected ? white : (dark-mode ? Theme.text-dark : Theme.text-light);
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
 
 export component DiscoverView inherits Rectangle {
     in property <[SectionData]> sections;
+    in property <[SourceData]> sources;
+    in property <string> selected-source-id;
     in property <bool> is-loading;
     in property <bool> dark-mode: true;
 
     callback refresh();
-    callback open-book(string);
+    callback select-source(string);
+    callback open-book(string, string);
 
     background: dark-mode ? Theme.bg-dark : Theme.bg-light;
 
@@ -15,7 +44,6 @@ export component DiscoverView inherits Rectangle {
         padding-top: Theme.spacing-md;
         spacing: Theme.spacing-sm;
 
-        // Header
         HorizontalLayout {
             padding-left: Theme.spacing-md;
             padding-right: Theme.spacing-md;
@@ -50,7 +78,23 @@ export component DiscoverView inherits Rectangle {
             }
         }
 
-        // Loading state
+        if sources.length > 0 : Flickable {
+            height: 42px;
+            viewport-width: sources.length * 112px;
+
+            HorizontalLayout {
+                padding-left: Theme.spacing-md;
+                spacing: Theme.spacing-sm;
+
+                for source in sources : SourceTab {
+                    dark-mode: root.dark-mode;
+                    selected: source.id == selected-source-id;
+                    label: source.name;
+                    clicked => { root.select-source(source.id); }
+                }
+            }
+        }
+
         if is-loading && sections.length == 0 : Rectangle {
             vertical-stretch: 1;
 
@@ -85,7 +129,7 @@ export component DiscoverView inherits Rectangle {
                     title: section.title;
                     books: section.books;
                     dark-mode: root.dark-mode;
-                    book-clicked(id) => { root.open-book(id); }
+                    book-clicked(id, sourceId) => { root.open-book(id, sourceId); }
                 }
             }
         }

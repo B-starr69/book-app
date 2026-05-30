@@ -6,7 +6,7 @@ export component Section inherits Rectangle {
     in property <[BookData]> books;
     in property <bool> dark-mode: true;
 
-    callback book-clicked(string);
+    callback book-clicked(string, string);
 
     height: 220px;
     background: transparent;
@@ -48,7 +48,7 @@ export component Section inherits Rectangle {
                 for book in books : BookCard {
                     book: book;
                     dark-mode: root.dark-mode;
-                    clicked => { root.book-clicked(book.id); }
+                    clicked => { root.book-clicked(book.id, book.source-id); }
                 }
             }
         }

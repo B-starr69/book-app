@@ -1,5 +1,69 @@
 import { Theme } from "widgets/theme.slint";
 
+component SettingsActionRow inherits Rectangle {
+    in property <bool> dark-mode: true;
+    in property <string> title;
+    in property <string> description;
+    in property <string> icon;
+    in property <color> accent: Theme.accent;
+
+    callback clicked();
+
+    height: 72px;
+    border-radius: Theme.radius-md;
+    background: dark-mode ? Theme.card-dark : Theme.card-light;
+
+    TouchArea {
+        clicked => { root.clicked(); }
+
+        HorizontalLayout {
+            padding-left: Theme.spacing-md;
+            padding-right: Theme.spacing-md;
+            spacing: Theme.spacing-md;
+
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: accent.transparentize(0.82);
+
+                Text {
+                    text: icon;
+                    font-size: 18px;
+                    color: accent;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: title;
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                }
+
+                Text {
+                    text: description;
+                    font-size: 11px;
+                    color: Theme.text-muted-dark;
+                }
+            }
+
+            Text {
+                text: "→";
+                font-size: 18px;
+                color: Theme.text-muted-dark;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 export component SettingsView inherits Rectangle {
     in property <bool> dark-mode: true;
 
@@ -13,147 +77,134 @@ export component SettingsView inherits Rectangle {
         padding: Theme.spacing-md;
         spacing: Theme.spacing-md;
 
-        // Header
-        Text {
-            text: "Settings";
-            font-size: 20px;
-            font-weight: 700;
-            color: dark-mode ? Theme.text-dark : Theme.text-light;
+        Rectangle {
+            height: 96px;
+            border-radius: Theme.radius-lg;
+            background: dark-mode ? Theme.sidebar-dark : Theme.sidebar-light;
+
+            VerticalLayout {
+                padding: Theme.spacing-md;
+                spacing: 6px;
+
+                Text {
+                    text: "Settings";
+                    font-size: 24px;
+                    font-weight: 700;
+                    color: dark-mode ? Theme.text-dark : Theme.text-light;
+                }
+
+                Text {
+                    text: "Tune appearance and manage app storage from one place.";
+                    font-size: 12px;
+                    color: Theme.text-muted-dark;
+                }
+            }
         }
 
-        // Settings list
+        Text {
+            text: "Preferences";
+            font-size: 12px;
+            font-weight: 600;
+            color: Theme.text-muted-dark;
+        }
+
         VerticalLayout {
-            spacing: 2px;
+            spacing: Theme.spacing-sm;
 
-            // Dark mode toggle
-            Rectangle {
-                height: 56px;
-                border-radius: 8px;
-                background: dark-mode ? Theme.card-dark : Theme.card-light;
+            SettingsActionRow {
+                dark-mode: root.dark-mode;
+                title: "Dark Mode";
+                description: "Use dark theme throughout the app";
+                icon: "◐";
+                accent: Theme.accent;
 
-                HorizontalLayout {
-                    padding-left: 16px;
-                    padding-right: 16px;
+                clicked => {
+                    root.toggle-dark-mode();
+                }
 
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        alignment: center;
-
-                        Text {
-                            text: "Dark Mode";
-                            font-size: 15px;
-                            color: dark-mode ? Theme.text-dark : Theme.text-light;
-                        }
-
-                        Text {
-                            text: "Use dark theme throughout the app";
-                            font-size: 11px;
-                            color: Theme.text-muted-dark;
-                        }
+                TouchArea {
+                    width: 56px;
+                    height: 28px;
+                    x: parent.width - self.width - Theme.spacing-md;
+                    y: (parent.height - self.height) / 2;
+                    clicked => {
+                        root.toggle-dark-mode();
                     }
 
-                    // Toggle switch
-                    TouchArea {
-                        width: 50px;
-                        clicked => {
-                            root.toggle-dark-mode();
-                        }
+                    Rectangle {
+                        width: 56px;
+                        height: 28px;
+                        border-radius: 14px;
+                        background: dark-mode ? Theme.accent : Theme.text-muted-light;
 
                         Rectangle {
-                            width: 50px;
-                            height: 28px;
-                            border-radius: 14px;
-                            background: dark-mode ? Theme.accent : Theme.text-muted-light;
+                            x: dark-mode ? parent.width - self.width - 2px : 2px;
+                            y: 2px;
+                            width: 24px;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: white;
 
-                            Rectangle {
-                                x: dark-mode ? parent.width - self.width - 2px : 2px;
-                                y: 2px;
-                                width: 24px;
-                                height: 24px;
-                                border-radius: 12px;
-                                background: white;
-
-                                animate x { duration: 150ms; }
-                            }
+                            animate x { duration: 150ms; }
                         }
                     }
                 }
             }
 
-            // Sources
-            Rectangle {
-                height: 56px;
-                border-radius: 8px;
-                background: dark-mode ? Theme.card-dark : Theme.card-light;
+            SettingsActionRow {
+                dark-mode: root.dark-mode;
+                title: "Manage Sources";
+                description: "Add, edit, or remove book sources";
+                icon: "⎘";
+                accent: Theme.success;
 
                 TouchArea {
                     clicked => { root.manage-sources(); }
 
-                    HorizontalLayout {
-                        padding-left: 16px;
-                        padding-right: 16px;
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            alignment: center;
-
-                            Text {
-                                text: "Manage Sources";
-                                font-size: 15px;
-                                color: dark-mode ? Theme.text-dark : Theme.text-light;
-                            }
-
-                            Text {
-                                text: "Add, edit, or remove book sources";
-                                font-size: 11px;
-                                color: Theme.text-muted-dark;
-                            }
-                        }
+                    Rectangle {
+                        width: 76px;
+                        height: 28px;
+                        x: parent.width - self.width - Theme.spacing-md;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 14px;
+                        background: Theme.accent.transparentize(0.86);
 
                         Text {
-                            text: "→";
-                            font-size: 18px;
-                            color: Theme.text-muted-dark;
+                            text: "Open";
+                            font-size: 12px;
+                            font-weight: 600;
+                            color: Theme.accent;
+                            horizontal-alignment: center;
                             vertical-alignment: center;
                         }
                     }
                 }
             }
 
-            // Clear cache
-            Rectangle {
-                height: 56px;
-                border-radius: 8px;
-                background: dark-mode ? Theme.card-dark : Theme.card-light;
+            SettingsActionRow {
+                dark-mode: root.dark-mode;
+                title: "Clear Cache";
+                description: "Delete cached chapters and covers";
+                icon: "🗑";
+                accent: Theme.warning;
 
                 TouchArea {
                     clicked => { root.clear-cache(); }
 
-                    HorizontalLayout {
-                        padding-left: 16px;
-                        padding-right: 16px;
-
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            alignment: center;
-
-                            Text {
-                                text: "Clear Cache";
-                                font-size: 15px;
-                                color: dark-mode ? Theme.text-dark : Theme.text-light;
-                            }
-
-                            Text {
-                                text: "Delete cached chapters and covers";
-                                font-size: 11px;
-                                color: Theme.text-muted-dark;
-                            }
-                        }
+                    Rectangle {
+                        width: 76px;
+                        height: 28px;
+                        x: parent.width - self.width - Theme.spacing-md;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 14px;
+                        background: Theme.warning.transparentize(0.86);
 
                         Text {
-                            text: "🗑";
-                            font-size: 18px;
+                            text: "Run";
+                            font-size: 12px;
+                            font-weight: 600;
                             color: Theme.warning;
+                            horizontal-alignment: center;
                             vertical-alignment: center;
                         }
                     }
@@ -161,10 +212,8 @@ export component SettingsView inherits Rectangle {
             }
         }
 
-        // Spacer
         Rectangle { vertical-stretch: 1; }
 
-        // App info
         VerticalLayout {
             spacing: 4px;
 

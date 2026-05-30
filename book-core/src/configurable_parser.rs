@@ -11,13 +11,13 @@ use anyhow::Result;
 /// A parser that uses configurable CSS selectors from the database
 pub struct ConfigurableParser {
     config: SourceConfig,
-    runtime: Runtime,
+    _runtime: Runtime,
 }
 
 impl ConfigurableParser {
     pub fn new(config: SourceConfig) -> Self {
         let runtime = Runtime::new().unwrap();
-        Self { config, runtime }
+        Self { config, _runtime: runtime }
     }
 
     /// Parse the home/discover page using configured selectors
@@ -76,7 +76,7 @@ impl ConfigurableParser {
     }
 
     /// Parse book details page using configured selectors
-    pub fn parse_book_details(&self, html: &str, book_id: String) -> Result<ParsedBookDetails> {
+    pub fn parse_book_details(&self, html: &str, _book_id: String) -> Result<ParsedBookDetails> {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
 
@@ -95,7 +95,7 @@ impl ConfigurableParser {
             let parse_details_fn: Function = globals.get(function_name).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let value: Value = parse_details_fn.call((html,)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            let mut details: ParsedBookDetails = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let details: ParsedBookDetails = rquickjs_serde::from_value(value).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             Ok(details)
         })
@@ -187,10 +187,12 @@ impl ConfigurableParser {
 
 // ==================== Helper Functions ====================
 
+#[allow(dead_code)]
 fn parse_selector(selector: &str) -> Result<Selector, String> {
     Selector::parse(selector).map_err(|e| format!("Invalid selector '{}': {:?}", selector, e))
 }
 
+#[allow(dead_code)]
 fn extract_text(document: &Html, selector: &str) -> Option<String> {
     let sel = Selector::parse(selector).ok()?;
     document
@@ -199,6 +201,7 @@ fn extract_text(document: &Html, selector: &str) -> Option<String> {
         .map(|el| el.text().collect::<String>().trim().to_string())
 }
 
+#[allow(dead_code)]
 fn extract_all_text(document: &Html, selector: &str) -> Vec<String> {
     Selector::parse(selector)
         .ok()
@@ -211,6 +214,7 @@ fn extract_all_text(document: &Html, selector: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
 fn extract_attr(document: &Html, selector: &str, attr: &str) -> Option<String> {
     let sel = Selector::parse(selector).ok()?;
     document
@@ -220,6 +224,7 @@ fn extract_attr(document: &Html, selector: &str, attr: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+#[allow(dead_code)]
 fn extract_id_from_pattern(href: &str, regex: &Regex) -> Option<String> {
     regex
         .captures(href)
@@ -228,6 +233,7 @@ fn extract_id_from_pattern(href: &str, regex: &Regex) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+#[allow(dead_code)]
 fn determine_layout(title: &str, mappings: &[LayoutMapping]) -> SectionLayout {
     for mapping in mappings {
         if title.to_lowercase().contains(&mapping.title_contains.to_lowercase()) {

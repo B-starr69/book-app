@@ -8,7 +8,7 @@ export component LibraryView inherits Rectangle {
     in property <bool> dark-mode: true;
 
     callback refresh();
-    callback open-book(string);
+    callback open-book(string, string);
 
     background: dark-mode ? Theme.bg-dark : Theme.bg-light;
 
@@ -133,7 +133,7 @@ export component LibraryView inherits Rectangle {
                         if row * 3 + col < books.length : BookCard {
                             book: books[row * 3 + col];
                             dark-mode: root.dark-mode;
-                            clicked => { root.open-book(self.book.id); }
+                            clicked => { root.open-book(self.book.id, self.book.source-id); }
                         }
                     }
                 }

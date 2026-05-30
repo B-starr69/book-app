@@ -1,4 +1,4 @@
-import { Theme, BookData, ChapterData, SectionData, SearchResultData, ViewState } from "widgets/theme.slint";
+import { Theme, BookData, ChapterData, SectionData, SearchResultData, SourceData, ViewState } from "widgets/theme.slint";
 import { NavBar } from "widgets/nav_bar.slint";
 import { LibraryView } from "library.slint";
 import { DiscoverView } from "discover.slint";
@@ -7,7 +7,7 @@ import { BookDetailsView } from "book_details.slint";
 import { ReaderView } from "reader.slint";
 import { SettingsView } from "settings.slint";
 
-export { Theme, BookData, ChapterData, SectionData, SearchResultData, ViewState }
+export { Theme, BookData, ChapterData, SectionData, SearchResultData, SourceData, ViewState }
 
 export component App inherits Window {
     title: "Book App";
@@ -26,6 +26,8 @@ export component App inherits Window {
     // Data properties
     in-out property <[BookData]> library-books: [];
     in-out property <[SectionData]> discover-sections: [];
+    in-out property <[SourceData]> discover-sources: [];
+    in-out property <string> selected-discover-source-id: "";
     in-out property <[SearchResultData]> search-results: [];
     in-out property <BookData> current-book;
     in-out property <[ChapterData]> book-chapters: [];
@@ -43,8 +45,8 @@ export component App inherits Window {
     // Callbacks to Rust
     callback navigate(ViewState);
     callback load-library();
-    callback load-discover();
-    callback open-book(string);
+    callback load-discover(string);
+    callback open-book(string, string);
     callback read-chapter(string, string);
     callback search(string);
     callback add-to-library();
@@ -70,16 +72,23 @@ export component App inherits Window {
                 is-loading: root.is-loading;
                 dark-mode: root.dark-mode;
                 refresh => { root.load-library(); }
-                open-book(id) => { root.open-book(id); }
+                open-book(id, sourceId) => { root.open-book(id, sourceId); }
             }
 
             // Discover View
             if current-view == ViewState.Discover : DiscoverView {
                 sections: discover-sections;
+                sources: discover-sources;
+                selected-source-id: root.selected-discover-source-id;
                 is-loading: root.is-loading;
                 dark-mode: root.dark-mode;
-                refresh => { root.load-discover(); }
-                open-book(id) => { root.open-book(id); }
+                refresh => { root.load-discover(root.selected-discover-source-id); }
+                select-source(id) => {
+                    root.selected-discover-source-id = id;
+                    root.is-loading = true;
+                    root.load-discover(id);
+                }
+                open-book(id, sourceId) => { root.open-book(id, sourceId); }
             }
 
             // Search View
@@ -89,7 +98,7 @@ export component App inherits Window {
                 dark-mode: root.dark-mode;
                 query <=> root.search-query;
                 search(q) => { root.search(q); }
-                open-book(id) => { root.open-book(id); }
+                open-book(id, sourceId) => { root.open-book(id, sourceId); }
             }
 
             // Settings View
@@ -189,7 +198,7 @@ export component App inherits Window {
             navigate(view) => {
                 root.current-view = view;
                 if view == ViewState.Discover && discover-sections.length == 0 {
-                    root.load-discover();
+                    root.load-discover(root.selected-discover-source-id);
                 }
             }
         }

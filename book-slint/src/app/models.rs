@@ -1,6 +1,7 @@
-use crate::{App, BookData, ChapterData, SectionData, SearchResultData};
+use crate::{BookData, ChapterData, SectionData, SearchResultData};
 use book_core::{Book, Chapter, HomeSection, SearchResult};
-use slint::{Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use slint::{Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel};
+use super::cover_registry;
 
 // OPTIMIZATION: Avoid converting the entire image data if we can avoid it.
 // Ensure your dependencies pass a pre-allocated buffer where possible.
@@ -53,7 +54,16 @@ pub fn search_results_to_model(results: &[SearchResult]) -> ModelRc<SearchResult
         title: SharedString::from(&r.title),
         cover_url: SharedString::from(&r.cover_url),
         source_name: r.source_name.as_ref().map_or_else(SharedString::default, SharedString::from),
-        cover_image: Image::default(),
+        // Try to use cached RGBA from cover registry to avoid re-decoding on UI thread
+        cover_image: if let Some(src_id) = r.source_id.as_ref() {
+            if let Some((rgba, w, h)) = cover_registry::get(src_id, &r.id) {
+                rgba_to_image(&rgba, w, h).unwrap_or(Image::default())
+            } else {
+                Image::default()
+            }
+        } else {
+            Image::default()
+        },
     }).collect();
     ModelRc::new(VecModel::from(items))
 }
@@ -68,7 +78,11 @@ pub fn section_to_slint(section: &HomeSection, source_id: &str) -> SectionData {
         cover_url: SharedString::from(&b.cover_url),
         progress: 0.0,
         chapters_count: 0,
-        cover_image: Image::default(),
+        cover_image: if let Some((rgba, w, h)) = cover_registry::get(source_id, &b.id) {
+            rgba_to_image(&rgba, w, h).unwrap_or(Image::default())
+        } else {
+            Image::default()
+        },
         in_library: false,
     }).collect();
 

@@ -8,7 +8,7 @@ export component SearchView inherits Rectangle {
     in-out property <string> query;
 
     callback search(string);
-    callback open-book(string);
+    callback open-book(string, string);
 
     background: dark-mode ? Theme.bg-dark : Theme.bg-light;
 
@@ -150,7 +150,7 @@ export component SearchView inherits Rectangle {
                             property <SearchResultData> result: results[row * 3 + col];
 
                             TouchArea {
-                                clicked => { root.open-book(result.id); }
+                                clicked => { root.open-book(result.id, result.source-id); }
 
                                 VerticalLayout {
                                     // Cover placeholder
