@@ -1,12 +1,12 @@
 use crate::App;
-use book_core::{Book, Chapter, Database, SourceWithConfig};
+use book_core::{Book, Database, SourceWithConfig};
 use slint::{ComponentHandle, SharedString};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 
-use super::cover_cache;
 use super::messages::Message;
 use super::SharedResources;
+use super::cover_registry;
 
 pub fn setup_callbacks(
     ui: &App,
@@ -49,7 +49,13 @@ pub fn setup_callbacks(
                     if let Some(sections) = book_core::api::get_discover_page(source.clone()).await {
                         for section in &sections {
                             for book in &section.books {
-                                super::load_cover_async(&tx, &source_id, &book.id, &book.cover_url, Arc::clone(&shared.http_client));
+                                super::load_cover_async(
+                                    &tx,
+                                    &source_id,
+                                    &book.id,
+                                    &book.cover_url,
+                                    Arc::clone(&shared.runtime),
+                                );
                             }
                         }
                         let _ = tx.send(Message::DiscoverLoaded { source_id, sections });
@@ -114,66 +120,27 @@ pub fn setup_callbacks(
         let shared = Arc::clone(&shared_book);
         if let Some(source) = sources.first().cloned() {
             std::thread::spawn(move || {
-                if let Ok(db) = Database::new() {
-                    if let Ok(Some(cached_book)) = db.get_full_book(&book_id, &source.id) {
-                        let _ = tx.send(Message::BookDetailsLoaded(cached_book));
-                        return;
-                    }
-                }
-
                 let rt = Arc::clone(&shared.runtime);
-                rt.block_on(async {
-                    if let Some(details) = book_core::api::get_book_details(&source, book_id.clone()).await {
-                        let book = Book {
-                            id: book_id.clone(),
-                            source_id: source.id.clone(),
-                            title: details.title,
-                            author: details.author,
-                            cover_url: details.cover_url.clone(),
-                            rating: details.rating,
-                            status: details.status,
-                            chapters_count: details.chapters_count,
-                            genres: details.genres,
-                            summary: details.summary,
-                            in_library: false,
-                            chapters: details
-                                .chapters
-                                .into_iter()
-                                .map(|c| Chapter {
-                                    id: c.id,
-                                    title: c.title,
-                                    date: c.date,
-                                    progress: 0.0,
-                                    last_read: 0,
-                                })
-                                .collect(),
-                        };
+                let book = if let Ok(db) = Database::new() {
+                    rt.block_on(async {
+                        book_core::api::get_book_details_cached(&db, &source, book_id.clone()).await
+                    })
+                } else {
+                    None
+                };
 
-                        if let Ok(db) = Database::new() {
-                            let _ = db.save_full_book(&book);
-                        }
-
-                        let tx2 = tx.clone();
-                        let source_id = source.id.clone();
-                        let bid = book_id.clone();
-                        let curl = details.cover_url.clone();
-                        let client = Arc::clone(&shared.http_client);
-                        std::thread::spawn(move || {
-                            cover_cache::cache_cover_sync(&client, &source_id, &bid, &curl);
-                            if let Some(path) = cover_cache::get_cached_cover_path(&source_id, &bid) {
-                                if let Ok(data) = std::fs::read(&path) {
-                                    let _ = tx2.send(Message::CoverLoaded {
-                                        source_id: source_id.clone(),
-                                        book_id: bid,
-                                        image_data: data,
-                                    });
-                                }
-                            }
-                        });
-
-                        let _ = tx.send(Message::BookDetailsLoaded(book));
-                    }
-                });
+                if let Some(book) = book {
+                    let _ = tx.send(Message::BookDetailsLoaded(book.clone()));
+                    super::load_cover_async(
+                        &tx,
+                        &book.source_id,
+                        &book.id,
+                        &book.cover_url,
+                        Arc::clone(&shared.runtime),
+                    );
+                } else {
+                    let _ = tx.send(Message::Error("Book details failed".to_string()));
+                }
             });
         }
     });
@@ -196,17 +163,29 @@ pub fn setup_callbacks(
         if !source_id.is_empty() {
             let shared = Arc::clone(&shared_chapter);
             std::thread::spawn(move || {
-                shared.runtime.block_on(async {
-                    if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
-                        if let Some(chapter) = book_core::api::get_chapter_content(&source, book_id.clone(), chapter_id.clone()).await {
-                            let _ = tx.send(Message::ChapterContentLoaded {
-                                content: chapter.content,
-                                book_id,
-                                chapter_id,
-                            });
+                if let Ok(db) = Database::new() {
+                    let content = shared.runtime.block_on(async {
+                        if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
+                            book_core::api::get_chapter_content_cached(
+                                &db,
+                                &source,
+                                book_id.clone(),
+                                chapter_id.clone(),
+                            )
+                            .await
+                        } else {
+                            None
                         }
+                    });
+
+                    if let Some(content) = content {
+                        let _ = tx.send(Message::ChapterContentLoaded {
+                            content,
+                            book_id,
+                            chapter_id,
+                        });
                     }
-                });
+                }
             });
         }
     });
@@ -231,17 +210,23 @@ pub fn setup_callbacks(
         let tx = msg_tx_prev.clone();
         let shared = Arc::clone(&shared_prev);
         std::thread::spawn(move || {
-            shared.runtime.block_on(async {
-                if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
-                    if let Some(chapter) = book_core::api::get_chapter_content(&source, book_id.clone(), target.clone()).await {
-                        let _ = tx.send(Message::ChapterContentLoaded {
-                            content: chapter.content,
-                            book_id,
-                            chapter_id: target,
-                        });
+            if let Ok(db) = Database::new() {
+                let content = shared.runtime.block_on(async {
+                    if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
+                        book_core::api::get_chapter_content_cached(&db, &source, book_id.clone(), target.clone()).await
+                    } else {
+                        None
                     }
+                });
+
+                if let Some(content) = content {
+                    let _ = tx.send(Message::ChapterContentLoaded {
+                        content,
+                        book_id,
+                        chapter_id: target,
+                    });
                 }
-            });
+            }
         });
     });
 
@@ -265,17 +250,23 @@ pub fn setup_callbacks(
         let tx = msg_tx_next.clone();
         let shared = Arc::clone(&shared_next);
         std::thread::spawn(move || {
-            shared.runtime.block_on(async {
-                if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
-                    if let Some(chapter) = book_core::api::get_chapter_content(&source, book_id.clone(), target.clone()).await {
-                        let _ = tx.send(Message::ChapterContentLoaded {
-                            content: chapter.content,
-                            book_id,
-                            chapter_id: target,
-                        });
+            if let Ok(db) = Database::new() {
+                let content = shared.runtime.block_on(async {
+                    if let Some(source) = sources.iter().find(|s| s.id == source_id).cloned() {
+                        book_core::api::get_chapter_content_cached(&db, &source, book_id.clone(), target.clone()).await
+                    } else {
+                        None
                     }
+                });
+
+                if let Some(content) = content {
+                    let _ = tx.send(Message::ChapterContentLoaded {
+                        content,
+                        book_id,
+                        chapter_id: target,
+                    });
                 }
-            });
+            }
         });
     });
 
@@ -323,10 +314,11 @@ pub fn setup_callbacks(
         });
     });
 
+    let msg_tx_search = msg_tx.clone();
     let sources_search = Arc::clone(&sources);
     let shared_search = Arc::clone(&shared);
     ui.on_search(move |query| {
-        let tx = msg_tx.clone();
+        let tx = msg_tx_search.clone();
         let sources = sources_search.read().unwrap().clone();
         let query = query.to_string();
         let shared = Arc::clone(&shared_search);
@@ -336,13 +328,30 @@ pub fn setup_callbacks(
                     if let Some(results) = book_core::api::search_books(source, &query).await {
                         for result in &results {
                             if let Some(result_source_id) = &result.source_id {
-                                super::load_cover_async(&tx, result_source_id, &result.id, &result.cover_url, Arc::clone(&shared.http_client));
+                                super::load_cover_async(
+                                    &tx,
+                                    result_source_id,
+                                    &result.id,
+                                    &result.cover_url,
+                                    Arc::clone(&shared.runtime),
+                                );
                             }
                         }
                         let _ = tx.send(Message::SearchResults(results));
                     }
                 }
             });
+        });
+    });
+
+    let msg_tx_cache = msg_tx.clone();
+    ui.on_clear_cache(move || {
+        let tx = msg_tx_cache.clone();
+        std::thread::spawn(move || {
+            if let Ok(db) = Database::new() {
+                let _ = db.clear_all_cache();
+            }
+            let _ = tx.send(Message::Error("Cache cleared".to_string()));
         });
     });
 }

@@ -1,7 +1,7 @@
 covers
 junk
+sources/
 /library.db
 target
-.github/workflows/android-build.yml
 /*.md
 !README.md

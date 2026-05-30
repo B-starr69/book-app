@@ -695,6 +695,7 @@ dependencies = [
  "book-core",
  "image",
  "log",
+ "once_cell",
  "reqwest",
  "slint",
  "slint-build",

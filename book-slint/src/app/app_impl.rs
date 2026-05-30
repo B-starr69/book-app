@@ -1,11 +1,11 @@
 #[path = "messages.rs"]
 mod messages;
-#[path = "cover_cache.rs"]
-mod cover_cache;
 #[path = "models.rs"]
 mod models;
 #[path = "callbacks.rs"]
 mod callbacks;
+#[path = "cover_registry.rs"]
+mod cover_registry;
 
 use crate::{App, ViewState};
 use book_core::{Book, Database};
@@ -18,9 +18,9 @@ pub struct BookApp {
     ui: App,
 }
 
+
 pub(super) struct SharedResources {
     runtime: Arc<tokio::runtime::Runtime>,
-    http_client: Arc<reqwest::blocking::Client>,
 }
 
 impl BookApp {
@@ -30,15 +30,8 @@ impl BookApp {
 
         let database = Arc::new(Database::new().ok());
         let runtime = Arc::new(tokio::runtime::Runtime::new().unwrap());
-        let http_client = Arc::new(
-            reqwest::blocking::Client::builder()
-                .user_agent("book-app")
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new()),
-        );
         let shared = Arc::new(SharedResources {
             runtime: Arc::clone(&runtime),
-            http_client: Arc::clone(&http_client),
         });
 
         let sources = if let Some(ref db) = *database {
@@ -53,7 +46,7 @@ impl BookApp {
                 ui.set_library_books(models::books_to_model(&books));
                 let tx = msg_tx.clone();
                 for book in books.iter() {
-                    load_cover_async(&tx, &book.source_id, &book.id, &book.cover_url, Arc::clone(&http_client));
+                    load_cover_async(&tx, &book.source_id, &book.id, &book.cover_url, Arc::clone(&runtime));
                 }
             }
         }
@@ -118,13 +111,15 @@ impl BookApp {
                 *current_book_state.write().unwrap() = Some(merged_book.clone());
                 ui.set_current_book(models::book_to_slint(&merged_book));
                 ui.set_book_chapters(models::chapters_to_model(&merged_book.chapters));
-                if let Some(path) = cover_cache::get_cached_cover_path(&merged_book.source_id, &merged_book.id) {
-                    if let Ok(data) = std::fs::read(&path) {
-                        if let Some(image) = models::bytes_to_image(&data) {
-                            ui.set_current_book_cover(image);
-                        } else {
-                            ui.set_current_book_cover(Image::default());
-                        }
+                let cached_bytes = if let Ok(db) = Database::new() {
+                    db.get_cached_cover(&merged_book.id, &merged_book.source_id).ok().flatten()
+                } else {
+                    None
+                };
+
+                if let Some(bytes) = cached_bytes {
+                    if let Some(image) = models::bytes_to_image(&bytes) {
+                        ui.set_current_book_cover(image);
                     } else {
                         ui.set_current_book_cover(Image::default());
                     }
@@ -162,21 +157,47 @@ impl BookApp {
                 ui.set_search_results(models::search_results_to_model(&results));
                 ui.set_is_searching(false);
             }
-            Message::CoverLoaded { source_id, book_id, image_data } => {
-                if let Some(image) = models::bytes_to_image(&image_data) {
-                    if current_book_state
-                        .read()
-                        .unwrap()
-                        .as_ref()
-                        .map(|book| book.id == book_id && book.source_id == source_id)
-                        .unwrap_or(false)
-                    {
-                        ui.set_current_book_cover(image.clone());
+                    Message::CoverLoaded { source_id, book_id, image_data } => {
+                        // Backwards-compatible: if someone still sends raw bytes, decode and thumbnail on the UI thread.
+                        if let Ok(img) = image::load_from_memory(&image_data) {
+                            let thumb = img.thumbnail(256, 256);
+                            let rgba_buf = thumb.to_rgba8();
+                            let width = rgba_buf.width();
+                            let height = rgba_buf.height();
+                            let rgba_vec = rgba_buf.into_raw();
+                            if let Some(image) = models::rgba_to_image(&rgba_vec, width, height) {
+                                if current_book_state
+                                    .read()
+                                    .unwrap()
+                                    .as_ref()
+                                    .map(|book| book.id == book_id && book.source_id == source_id)
+                                    .unwrap_or(false)
+                                {
+                                    ui.set_current_book_cover(image.clone());
+                                }
+                                // Insert RGBA bytes into the registry (Send/Sync-friendly)
+                                cover_registry::insert(&source_id, &book_id, rgba_vec.clone(), width, height);
+                                // Notify UI with the slint Image for immediate display
+                                ui.invoke_on_cover_loaded(SharedString::from(&book_id), image);
+                            }
+                        }
                     }
-                    models::update_book_cover_models(ui, &source_id, &book_id, image.clone());
-                    ui.invoke_on_cover_loaded(SharedString::from(&book_id), image);
-                }
-            }
+                    Message::CoverDecoded { source_id, book_id, rgba, width, height } => {
+                        if let Some(image) = models::rgba_to_image(&rgba, width, height) {
+                            if current_book_state
+                                .read()
+                                .unwrap()
+                                .as_ref()
+                                .map(|book| book.id == book_id && book.source_id == source_id)
+                                .unwrap_or(false)
+                            {
+                                ui.set_current_book_cover(image.clone());
+                            }
+                            // store raw rgba bytes (sendable) in the registry
+                            cover_registry::insert(&source_id, &book_id, rgba.clone(), width, height);
+                            ui.invoke_on_cover_loaded(SharedString::from(&book_id), image);
+                        }
+                    }
             Message::ChapterProgress { book_id, chapter_id, progress } => {
                 let mut state = current_book_state.write().unwrap();
                 if let Some(ref mut book) = *state {
@@ -242,33 +263,37 @@ pub(super) fn load_cover_async(
     source_id: &str,
     book_id: &str,
     cover_url: &str,
-    http_client: Arc<reqwest::blocking::Client>,
+    runtime: Arc<tokio::runtime::Runtime>,
 ) {
     let source_id = source_id.to_string();
     let book_id = book_id.to_string();
     let cover_url = cover_url.to_string();
     let tx = tx.clone();
 
-    std::thread::spawn(move || {
-        if let Some(path) = cover_cache::get_cached_cover_path(&source_id, &book_id) {
-            if let Ok(data) = std::fs::read(&path) {
-                let _ = tx.send(Message::CoverLoaded {
-                    source_id,
-                    book_id,
-                    image_data: data,
-                });
-                return;
-            }
-        }
-
-        if !cover_url.is_empty() {
-            cover_cache::cache_cover_sync(&http_client, &source_id, &book_id, &cover_url);
-            if let Some(path) = cover_cache::get_cached_cover_path(&source_id, &book_id) {
-                if let Ok(data) = std::fs::read(&path) {
+    let runtime_for_blocking = Arc::clone(&runtime);
+    runtime_for_blocking.spawn_blocking(move || {
+        if let Ok(db) = Database::new() {
+            if let Some(bytes) = book_core::api::get_cover_bytes_cached_blocking(
+                &db,
+                &cover_url,
+                &source_id,
+                &book_id,
+            ) {
+                // Decode and create a small thumbnail on the background thread to avoid blocking the UI.
+                if let Ok(img) = image::load_from_memory(&bytes) {
+                    // Create a thumbnail with a max dimension (keeps aspect ratio).
+                    let thumb = img.thumbnail(256, 256);
+                    let rgba = thumb.to_rgba8();
+                    let width = rgba.width();
+                    let height = rgba.height();
+                    let rgba_vec = rgba.into_raw();
+                    let _ = tx.send(Message::CoverDecoded { source_id, book_id, rgba: rgba_vec, width, height });
+                } else {
+                    // Fallback: send raw bytes if decoding failed in background.
                     let _ = tx.send(Message::CoverLoaded {
                         source_id,
                         book_id,
-                        image_data: data,
+                        image_data: bytes,
                     });
                 }
             }

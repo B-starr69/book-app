@@ -71,6 +71,9 @@ export struct SearchResultData {
     source-name: string,
 }
 
+// Image cache - Rust provides the implementation via a global callback
+// (ImageCache removed — using embedded `cover-image` in models)
+
 // View state enum
 export enum ViewState {
     Library,
