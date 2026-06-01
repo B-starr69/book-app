@@ -76,8 +76,8 @@ impl BookApp {
                 let mut items = Vec::new();
                 for book in books.iter() {
                     let mut bd = models::book_to_slint(book);
-                    if let Some((rgba, width, height)) = cover_registry::get(&book.source_id, &book.id) {
-                        if let Some(img) = models::rgba_to_image(&rgba, width, height) {
+                    if let Some((rgba_arc, width, height)) = cover_registry::get(&book.source_id, &book.id) {
+                        if let Some(img) = models::rgba_to_image(&*rgba_arc, width, height) {
                             bd.cover_image = img;
                         }
                     }
@@ -212,8 +212,8 @@ impl BookApp {
                 ui.set_current_book(models::book_to_slint(&merged_book));
                 ui.set_book_chapters(models::chapters_to_model(&merged_book.chapters));
                 // Prefer in-memory registry (RGBA) to avoid decoding on UI thread
-                if let Some((rgba, w, h)) = cover_registry::get(&merged_book.source_id, &merged_book.id) {
-                    if let Some(image) = models::rgba_to_image(&rgba, w, h) {
+                if let Some((rgba_arc, w, h)) = cover_registry::get(&merged_book.source_id, &merged_book.id) {
+                    if let Some(image) = models::rgba_to_image(&*rgba_arc, w, h) {
                         ui.set_current_book_cover(image);
                     } else {
                         ui.set_current_book_cover(Image::default());
@@ -293,7 +293,7 @@ impl BookApp {
                                     ui.set_current_book_cover(image.clone());
                                 }
                                 // Insert RGBA bytes into the registry (Send/Sync-friendly)
-                                cover_registry::insert(&source_id, &book_id, rgba_vec.clone(), width, height);
+                                cover_registry::insert(&source_id, &book_id, std::sync::Arc::new(rgba_vec.clone()), width, height);
                                 // Notify UI with the slint Image for immediate display
                                 ui.invoke_on_cover_loaded(SharedString::from(&book_id), image);
                             }
@@ -311,7 +311,7 @@ impl BookApp {
                                 ui.set_current_book_cover(image.clone());
                             }
                             // store raw rgba bytes (sendable) in the registry
-                            cover_registry::insert(&source_id, &book_id, rgba.clone(), width, height);
+                            cover_registry::insert(&source_id, &book_id, std::sync::Arc::new(rgba.clone()), width, height);
                             ui.invoke_on_cover_loaded(SharedString::from(&book_id), image);
                         }
                     }

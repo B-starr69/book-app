@@ -66,8 +66,8 @@ pub fn setup_callbacks(
                     let ui_weak_inner = ui.as_weak();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak_inner.upgrade() {
-                            let cover_image = if let Some((rgba, w, h)) = cover_registry::get(&source_id_s, &id_s) {
-                                models::rgba_to_image(&rgba, w, h).unwrap_or(slint::Image::default())
+                            let cover_image = if let Some((rgba_arc, w, h)) = cover_registry::get(&source_id_s, &id_s) {
+                                models::rgba_to_image(&*rgba_arc, w, h).unwrap_or(slint::Image::default())
                             } else {
                                 slint::Image::default()
                             };
@@ -92,8 +92,8 @@ pub fn setup_callbacks(
                     .map(|b| {
                         let mut bd = models::book_to_slint(b);
                         if b.id == id {
-                            if let Some((rgba, w, h)) = cover_registry::get(&b.source_id, &b.id) {
-                                bd.cover_image = models::rgba_to_image(&rgba, w, h).unwrap_or(slint::Image::default());
+                            if let Some((rgba_arc, w, h)) = cover_registry::get(&b.source_id, &b.id) {
+                                bd.cover_image = models::rgba_to_image(&*rgba_arc, w, h).unwrap_or(slint::Image::default());
                             }
                         }
                         bd
@@ -113,8 +113,8 @@ pub fn setup_callbacks(
                         let ui_weak_inner = ui.as_weak();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(ui) = ui_weak_inner.upgrade() {
-                                let cover_image = if let Some((rgba, w, h)) = cover_registry::get(&source_id, &id_s) {
-                                    models::rgba_to_image(&rgba, w, h).unwrap_or(slint::Image::default())
+                                let cover_image = if let Some((rgba_arc, w, h)) = cover_registry::get(&source_id, &id_s) {
+                                    models::rgba_to_image(&*rgba_arc, w, h).unwrap_or(slint::Image::default())
                                 } else {
                                     slint::Image::default()
                                 };
@@ -149,9 +149,9 @@ pub fn setup_callbacks(
                     let ui_weak_inner = ui.as_weak();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(ui) = ui_weak_inner.upgrade() {
-                            let cover_image = if let Some(src_id) = source_id_s.as_ref() {
-                                if let Some((rgba, w, h)) = cover_registry::get(src_id, &id_s) {
-                                    models::rgba_to_image(&rgba, w, h).unwrap_or(slint::Image::default())
+                                let cover_image = if let Some(src_id) = source_id_s.as_ref() {
+                                if let Some((rgba_arc, w, h)) = cover_registry::get(src_id, &id_s) {
+                                    models::rgba_to_image(&*rgba_arc, w, h).unwrap_or(slint::Image::default())
                                 } else {
                                     slint::Image::default()
                                 }

@@ -56,8 +56,8 @@ pub fn search_results_to_model(results: &[SearchResult]) -> ModelRc<SearchResult
         source_name: r.source_name.as_ref().map_or_else(SharedString::default, SharedString::from),
         // Try to use cached RGBA from cover registry to avoid re-decoding on UI thread
         cover_image: if let Some(src_id) = r.source_id.as_ref() {
-            if let Some((rgba, w, h)) = cover_registry::get(src_id, &r.id) {
-                rgba_to_image(&rgba, w, h).unwrap_or(Image::default())
+            if let Some((rgba_arc, w, h)) = cover_registry::get(src_id, &r.id) {
+                rgba_to_image(&*rgba_arc, w, h).unwrap_or(Image::default())
             } else {
                 Image::default()
             }
@@ -78,8 +78,8 @@ pub fn section_to_slint(section: &HomeSection, source_id: &str) -> SectionData {
         cover_url: SharedString::from(&b.cover_url),
         progress: 0.0,
         chapters_count: 0,
-        cover_image: if let Some((rgba, w, h)) = cover_registry::get(source_id, &b.id) {
-            rgba_to_image(&rgba, w, h).unwrap_or(Image::default())
+        cover_image: if let Some((rgba_arc, w, h)) = cover_registry::get(source_id, &b.id) {
+            rgba_to_image(&*rgba_arc, w, h).unwrap_or(Image::default())
         } else {
             Image::default()
         },
