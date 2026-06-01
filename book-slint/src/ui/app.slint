@@ -17,6 +17,7 @@ export component App inherits Window {
 
     // State properties
     in-out property <ViewState> current-view: ViewState.Library;
+    in-out property <ViewState> previous-view: ViewState.Library;
     in-out property <bool> dark-mode: true;
     in-out property <bool> is-loading: false;
     in-out property <string> error-message;
@@ -72,7 +73,7 @@ export component App inherits Window {
                 is-loading: root.is-loading;
                 dark-mode: root.dark-mode;
                 refresh => { root.load-library(); }
-                open-book(id, sourceId) => { root.open-book(id, sourceId); }
+                open-book(id, sourceId) => { root.previous-view = root.current-view; root.open-book(id, sourceId); }
             }
 
             // Discover View
@@ -88,7 +89,7 @@ export component App inherits Window {
                     root.is-loading = true;
                     root.load-discover(id);
                 }
-                open-book(id, sourceId) => { root.open-book(id, sourceId); }
+                open-book(id, sourceId) => { root.previous-view = root.current-view; root.open-book(id, sourceId); }
             }
 
             // Search View
@@ -98,7 +99,7 @@ export component App inherits Window {
                 dark-mode: root.dark-mode;
                 query <=> root.search-query;
                 search(q) => { root.search(q); }
-                open-book(id, sourceId) => { root.open-book(id, sourceId); }
+                open-book(id, sourceId) => { root.previous-view = root.current-view; root.open-book(id, sourceId); }
             }
 
             // Settings View
@@ -117,7 +118,7 @@ export component App inherits Window {
                 cover-image: root.current-book-cover;
                 is-loading: root.is-loading;
                 dark-mode: root.dark-mode;
-                go-back => { root.current-view = ViewState.Library; }
+                go-back => { root.current-view = root.previous-view; }
                 add-to-library => { root.add-to-library(); }
                 remove-from-library => { root.remove-from-library(); }
                 read-chapter(id) => { root.read-chapter(current-book.id, id); }
