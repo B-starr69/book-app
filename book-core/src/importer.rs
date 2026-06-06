@@ -14,12 +14,6 @@ use url::Url;
 struct RepoSource {
     name: String,
     url: String,
-    #[serde(rename = "discoverUrl")]
-    discover_url: Option<String>,
-    #[serde(rename = "booksUrl")]
-    books_url: Option<String>,
-    #[serde(rename = "chaptersUrl")]
-    chapters_url : Option<String>,
     #[serde(rename = "iconUrl")]
     icon_url: Option<String>,
     description: Option<String>,
