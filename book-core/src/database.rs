@@ -1,4 +1,4 @@
-use crate::models::{Book, CacheStats, Chapter, DbBook, DbChapter, Source, SourceConfig, SourceWithConfig};
+use crate::models::{Book, Chapter, Source, SourceConfig, SourceWithConfig};
 use chrono::Utc;
 use rusqlite::{params, Connection, Result};
 
@@ -17,8 +17,6 @@ impl Database {
                 id TEXT PRIMARY KEY,
                 url TEXT NOT NULL,
                 name TEXT NOT NULL,
-                discover_url TEXT,
-                books_url TEXT,
                 icon_url TEXT,
                 description TEXT,
                 origin_repo TEXT,
@@ -49,29 +47,7 @@ impl Database {
             [],
         )?;
 
-
-        // 3. Chapters Table
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS chapters (
-                id TEXT,
-                book_id TEXT NOT NULL,
-                source_id TEXT NOT NULL,
-                progress REAL NOT NULL DEFAULT 0,
-                last_read INTEGER,
-                PRIMARY KEY (source_id, id),
-                FOREIGN KEY (book_id, source_id) REFERENCES books (id, source_id) ON DELETE CASCADE
-            )",
-            [],
-        )?;
-
-        // Normalize any negative progress values (older versions may have used -1 as sentinel)
-        let _ = connection.execute(
-            "UPDATE chapters SET progress = CASE WHEN progress < 0 AND last_read IS NOT NULL AND last_read > 0 THEN 1.0 WHEN progress < 0 THEN 0.0 ELSE progress END",
-            [],
-        );
-
-
-
+        // 3. Chapter Content Cache
         connection.execute(
             "CREATE TABLE IF NOT EXISTS chapter_content (
                 book_id TEXT NOT NULL,
@@ -84,7 +60,7 @@ impl Database {
             [],
         )?;
 
-        // 5. Cover Cache Table (no FK - cache works for any book)
+        // 4. Cover Cache Table (no FK - cache works for any book)
         connection.execute(
             "CREATE TABLE IF NOT EXISTS covers (
                 book_id TEXT NOT NULL,
@@ -99,7 +75,7 @@ impl Database {
         // Migration: Add last_synced column to books if it doesn't exist
         let _ = connection.execute("ALTER TABLE books ADD COLUMN last_synced INTEGER", []);
 
-        // Also normalize chapters stored inside books.chapters_json where necessary
+        // Normalize any negative progress values stored in chapters_json
         if let Ok(mut stmt) = connection.prepare("SELECT id, source_id, chapters_json FROM books WHERE chapters_json LIKE '%\"progress\":-1%'") {
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
@@ -107,7 +83,7 @@ impl Database {
                 let source_id: String = row.get(1)?;
                 let chapters_json: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
                 if !chapters_json.is_empty() {
-                    if let Ok(mut chapters) = serde_json::from_str::<Vec<crate::models::Chapter>>(&chapters_json) {
+                    if let Ok(mut chapters) = serde_json::from_str::<Vec<Chapter>>(&chapters_json) {
                         let mut changed = false;
                         for ch in chapters.iter_mut() {
                             if ch.progress < 0.0 {
@@ -133,18 +109,8 @@ impl Database {
 
     // ==================== Books ====================
 
-    /// Insert a book with minimal info (for backward compatibility)
-    pub fn save_book(&self, book: &DbBook) -> Result<()> {
-        self.connection.execute(
-            "INSERT OR REPLACE INTO books (id, source_id, in_library)
-             VALUES (?1, ?2, ?3)",
-            params![book.id, book.source_id, book.in_library],
-        )?;
-        Ok(())
-    }
-
-    /// Save a full book with all metadata to library
-    pub fn save_full_book(&self, book: &Book) -> Result<()> {
+    /// Save a full book with all metadata
+    pub fn save_book(&self, book: &Book) -> Result<()> {
         let genres_json = serde_json::to_string(&book.genres).unwrap_or_default();
         let chapters_json = serde_json::to_string(&book.chapters).unwrap_or_default();
         let timestamp = Utc::now().timestamp();
@@ -197,6 +163,7 @@ impl Database {
                 chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
                 genres,
                 summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                last_read_timestamp: 0,
                 chapters,
             })
         })?;
@@ -204,7 +171,7 @@ impl Database {
         rows.collect()
     }
 
-    /// Remove a book from library
+    /// Remove a book from library (keeps it cached)
     pub fn remove_from_library(&self, book_id: &str, source_id: &str) -> Result<()> {
         self.connection.execute(
             "UPDATE books SET in_library = 0 WHERE id = ?1 AND source_id = ?2",
@@ -214,7 +181,7 @@ impl Database {
     }
 
     /// Get a full book by id (whether in library or just cached)
-    pub fn get_full_book(&self, id: &str, source_id: &str) -> Result<Option<Book>> {
+    pub fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>> {
         let mut stmt = self.connection.prepare(
             "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json
              FROM books WHERE id = ?1 AND source_id = ?2",
@@ -239,6 +206,7 @@ impl Database {
                 chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
                 genres,
                 summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                last_read_timestamp: 0,
                 chapters,
             })
         })?;
@@ -249,35 +217,34 @@ impl Database {
         Ok(None)
     }
 
-    pub fn get_db_book(&self, id: &str, source_id: &str) -> Result<Option<DbBook>> {
+    /// Get all books (whether in library or cached)
+    pub fn get_all_books(&self) -> Result<Vec<Book>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, source_id, in_library FROM books WHERE id = ?1 AND source_id = ?2",
+            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json
+             FROM books"
         )?;
 
-        let mut rows = stmt.query_map(params![id, source_id], |row| {
-            Ok(DbBook {
+        let rows = stmt.query_map([], |row| {
+            let genres_json: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+            let chapters_json: String = row.get::<_, Option<String>>(11)?.unwrap_or_default();
+
+            let genres: Vec<String> = serde_json::from_str(&genres_json).unwrap_or_default();
+            let chapters: Vec<Chapter> = serde_json::from_str(&chapters_json).unwrap_or_default();
+
+            Ok(Book {
                 id: row.get(0)?,
                 source_id: row.get(1)?,
                 in_library: row.get(2)?,
-            })
-        })?;
-
-        if let Some(res) = rows.next() {
-            return Ok(Some(res?));
-        }
-        Ok(None)
-    }
-
-    pub fn get_all_db_books(&self) -> Result<Vec<DbBook>> {
-        let mut stmt = self
-            .connection
-            .prepare("SELECT id, source_id, in_library FROM books")?;
-
-        let rows = stmt.query_map(params![], |row| {
-            Ok(DbBook {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                in_library: row.get(2)?,
+                title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                author: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                cover_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                rating: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
+                status: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
+                genres,
+                summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                last_read_timestamp: 0,
+                chapters,
             })
         })?;
 
@@ -292,131 +259,54 @@ impl Database {
         )
     }
 
-    // ==================== Chapters ====================
+    // ==================== Chapter Progress ====================
 
-    /// Upsert progress for chapters
-    pub fn save_chapters_progress(&mut self, chapters: &[DbChapter]) -> Result<()> {
-        let tx = self.connection.transaction()?;
-
-        {
-            let mut stmt = tx.prepare(
-                "INSERT INTO chapters (id, book_id, source_id, progress, last_read)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT(source_id, id)
-                 DO UPDATE SET progress = excluded.progress, last_read = excluded.last_read",
-            )?;
-
-            for chap in chapters {
-                stmt.execute(params![
-                    chap.id,
-                    chap.book_id,
-                    chap.source_id,
-                    chap.progress,
-                    chap.last_read
-                ])?;
+    /// Update chapter progress within a book's chapters_json
+    pub fn update_chapter_progress(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        chapter_id: &str,
+        progress: f32,
+    ) -> Result<()> {
+        if let Some(mut book) = self.get_book(book_id, source_id)? {
+            let timestamp = Utc::now().timestamp();
+            for ch in book.chapters.iter_mut() {
+                if ch.id == chapter_id {
+                    ch.progress = progress;
+                    ch.last_read = timestamp;
+                    break;
+                }
             }
+            self.save_book(&book)?;
         }
-
-        tx.commit()?;
         Ok(())
     }
 
-    pub fn get_chapters_for_book(&self, book_id: &str, source_id: &str) -> Result<Vec<DbChapter>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, book_id, source_id, progress, last_read
-             FROM chapters
-             WHERE book_id = ?1 AND source_id = ?2
-             ORDER BY id ASC",
-        )?;
-
-        let chapter_iter = stmt.query_map(params![book_id, source_id], |row| {
-            Ok(DbChapter {
-                id: row.get(0)?,
-                book_id: row.get(1)?,
-                source_id: row.get(2)?,
-                progress: row.get(3)?,
-                last_read: row.get(4)?,
-            })
-        })?;
-
-        chapter_iter.collect()
-    }
-
-    pub fn get_chapters(&self) -> Result<Vec<DbChapter>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, book_id, source_id, progress, last_read
-             FROM chapters",
-        )?;
-
-        let chapter_iter = stmt.query_map([], |row| {
-            Ok(DbChapter {
-                id: row.get(0)?,
-                book_id: row.get(1)?,
-                source_id: row.get(2)?,
-                progress: row.get(3)?,
-                last_read: row.get(4)?,
-            })
-        })?;
-
-        chapter_iter.collect()
-    }
-
-    /// Update chapter progress (legacy - may not work with composite key)
-    pub fn update_chapter_progress(&self, chapter_id: &str, progress: f32) -> Result<()> {
-        let timestamp_seconds = Utc::now().timestamp();
-        self.connection.execute(
-            "UPDATE chapters SET progress = ?1, last_read = ?2 WHERE id = ?3",
-            params![progress, timestamp_seconds, chapter_id],
-        )?;
-        Ok(())
-    }
-
-    /// Mark a chapter as read (upsert with proper composite key)
-    pub fn mark_chapter_read(&self, chapter_id: &str, book_id: &str, source_id: &str) -> Result<()> {
-        let timestamp_seconds = Utc::now().timestamp();
-        self.connection.execute(
-            "INSERT INTO chapters (id, book_id, source_id, progress, last_read)
-             VALUES (?1, ?2, ?3, 1.0, ?4)
-             ON CONFLICT(source_id, id) DO UPDATE SET progress = 1.0, last_read = excluded.last_read",
-            params![chapter_id, book_id, source_id, timestamp_seconds],
-        )?;
-        Ok(())
+    /// Mark a chapter as read (progress = 1.0)
+    pub fn mark_chapter_read(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        chapter_id: &str,
+    ) -> Result<()> {
+        self.update_chapter_progress(book_id, source_id, chapter_id, 1.0)
     }
 
     // ==================== Sources ====================
 
-    /// Insert or update a source (without config, for backward compatibility)
-    pub fn save_source(&self, source: &Source) -> Result<()> {
-        self.connection.execute(
-            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, icon_url, description, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, (SELECT config FROM sources WHERE id = ?1))",
-            params![
-                source.id,
-                source.url,
-                source.name,
-                source.discover_url,
-                source.books_url,
-                source.icon_url,
-                source.description
-            ],
-        )?;
-        Ok(())
-    }
-
     /// Insert or update a source with its configuration
-    pub fn save_source_with_config(&self, source: &SourceWithConfig) -> Result<()> {
+    pub fn save_source(&self, source: &SourceWithConfig) -> Result<()> {
         let config_json = serde_json::to_string(&source.config).unwrap_or_default();
         self.connection.execute(
-            "INSERT OR REPLACE INTO sources (id, url, name, discover_url, books_url, icon_url, description, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR REPLACE INTO sources (id, url, name, icon_url, description, config)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
-                source.id,
-                source.url,
-                source.name,
-                source.discover_url,
-                source.books_url,
-                source.icon_url,
-                source.description,
+                source.source.id,
+                source.source.url,
+                source.source.name,
+                source.source.icon_url,
+                source.source.description,
                 config_json
             ],
         )?;
@@ -442,26 +332,24 @@ impl Database {
         Ok(())
     }
 
-    /// Delete a source (cascades to books and chapters)
+    /// Delete a source (cascades to books)
     pub fn delete_source(&self, id: &str) -> Result<usize> {
         self.connection
             .execute("DELETE FROM sources WHERE id = ?1", params![id])
     }
 
     /// Return a source by id (without config)
-    pub fn get_source(&self, id: &str) -> Result<Option<Source>> {
+    pub fn get_source_info(&self, id: &str) -> Result<Option<Source>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit FROM sources WHERE id = ?1",
+            "SELECT id, url, name, icon_url, description FROM sources WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], |row| {
             Ok(Source {
                 id: row.get(0)?,
                 url: row.get(1)?,
                 name: row.get(2)?,
-                discover_url: row.get(3).unwrap_or_default(),
-                books_url: row.get(4).unwrap_or_default(),
-                icon_url: row.get::<_, Option<String>>(5)?,
-                description: row.get::<_, Option<String>>(6)?,
+                icon_url: row.get::<_, Option<String>>(3)?,
+                description: row.get::<_, Option<String>>(4)?,
             })
         })?;
         if let Some(r) = rows.next() {
@@ -471,23 +359,23 @@ impl Database {
     }
 
     /// Return a source with its config by id
-    pub fn get_source_with_config(&self, id: &str) -> Result<Option<SourceWithConfig>> {
+    pub fn get_source(&self, id: &str) -> Result<Option<SourceWithConfig>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit, config FROM sources WHERE id = ?1",
+            "SELECT id, url, name, icon_url, description, config FROM sources WHERE id = ?1",
         )?;
         let mut rows = stmt.query_map([id], |row| {
-            let config_json: Option<String> = row.get(9).ok();
+            let config_json: Option<String> = row.get(5).ok();
             let config: SourceConfig = config_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default();
             Ok(SourceWithConfig {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                name: row.get(2)?,
-                discover_url: row.get(3).unwrap_or_default(),
-                books_url: row.get(4).unwrap_or_default(),
-                icon_url: row.get::<_, Option<String>>(5)?,
-                description: row.get::<_, Option<String>>(6)?,
+                source: Source {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    name: row.get(2)?,
+                    icon_url: row.get::<_, Option<String>>(3)?,
+                    description: row.get::<_, Option<String>>(4)?,
+                },
                 config,
             })
         })?;
@@ -497,44 +385,24 @@ impl Database {
         Ok(None)
     }
 
-    /// Get all sources (without configs, for listing)
-    pub fn get_sources(&self) -> Result<Vec<Source>> {
-        let sql: &str = "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit FROM sources";
-        let mut stmt = self.connection.prepare(sql)?;
-
-        let source_iter = stmt.query_map([], |row| {
-            Ok(Source {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                name: row.get(2)?,
-                discover_url: row.get(3).unwrap_or_default(),
-                books_url: row.get(4).unwrap_or_default(),
-                icon_url: row.get::<_, Option<String>>(5)?,
-                description: row.get::<_, Option<String>>(6)?,
-            })
-        })?;
-
-        source_iter.collect()
-    }
-
     /// Get all sources with their configs
-    pub fn get_sources_with_config(&self) -> Result<Vec<SourceWithConfig>> {
-        let sql = "SELECT id, url, name, discover_url, books_url, icon_url, description, origin_repo, origin_commit, config FROM sources";
+    pub fn get_sources(&self) -> Result<Vec<SourceWithConfig>> {
+        let sql = "SELECT id, url, name, icon_url, description, config FROM sources";
         let mut stmt = self.connection.prepare(sql)?;
 
         let source_iter = stmt.query_map([], |row| {
-            let config_json: Option<String> = row.get(9).ok();
+            let config_json: Option<String> = row.get(5).ok();
             let config: SourceConfig = config_json
                 .and_then(|json| serde_json::from_str(&json).ok())
                 .unwrap_or_default();
             Ok(SourceWithConfig {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                name: row.get(2)?,
-                discover_url: row.get(3).unwrap_or_default(),
-                books_url: row.get(4).unwrap_or_default(),
-                icon_url: row.get::<_, Option<String>>(5)?,
-                description: row.get::<_, Option<String>>(6)?,
+                source: Source {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    name: row.get(2)?,
+                    icon_url: row.get::<_, Option<String>>(3)?,
+                    description: row.get::<_, Option<String>>(4)?,
+                },
                 config,
             })
         })?;
@@ -716,44 +584,6 @@ impl Database {
             }
             _ => true, // No last_synced means it needs sync
         }
-    }
-
-    // ==================== Cache Statistics ====================
-
-    /// Get total cache size in bytes (approximate)
-    pub fn get_cache_stats(&self) -> Result<CacheStats> {
-        let chapter_count: i32 = self.connection.query_row(
-            "SELECT COUNT(*) FROM chapter_content",
-            [],
-            |row| row.get(0),
-        )?;
-
-        let cover_count: i32 = self.connection.query_row(
-            "SELECT COUNT(*) FROM covers",
-            [],
-            |row| row.get(0),
-        )?;
-
-        // Approximate sizes
-        let chapter_size: i64 = self.connection.query_row(
-            "SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chapter_content",
-            [],
-            |row| row.get(0),
-        )?;
-
-        let cover_size: i64 = self.connection.query_row(
-            "SELECT COALESCE(SUM(LENGTH(image_data)), 0) FROM covers",
-            [],
-            |row| row.get(0),
-        )?;
-
-        Ok(CacheStats {
-            chapter_count,
-            cover_count,
-            chapter_size_bytes: chapter_size,
-            cover_size_bytes: cover_size,
-            total_size_bytes: chapter_size + cover_size,
-        })
     }
 
     /// Clear all cached data (chapters and covers)

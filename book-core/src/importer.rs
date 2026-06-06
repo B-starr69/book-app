@@ -1,7 +1,7 @@
 use crate::database::Database;
 use crate::models::{
-    ActionEngine, ChapterSelectors, DetailsSelectors, HomeSelectors, SearchConfig, SourceConfig,
-    SourceWithConfig,
+    ActionConfig, FetchMethod, JsExecutionConfig, NativeFetch, Source, SourceConfig, SourceWithConfig,
+    Strategy, UrlTarget,
 };
 use std::path::Path;
 use std::fs;
@@ -15,9 +15,11 @@ struct RepoSource {
     name: String,
     url: String,
     #[serde(rename = "discoverUrl")]
-    discover_url: String,
+    discover_url: Option<String>,
     #[serde(rename = "booksUrl")]
-    books_url: String,
+    books_url: Option<String>,
+    #[serde(rename = "chaptersUrl")]
+    chapters_url : Option<String>,
     #[serde(rename = "iconUrl")]
     icon_url: Option<String>,
     description: Option<String>,
@@ -114,40 +116,49 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
                     let config = if let Some(config_value) = meta.config.clone() {
                         serde_json::from_value::<SourceConfig>(config_value).unwrap_or_default()
                     } else if index_js_txt.is_some() {
-                        let search = meta
-                            .search
-                            .and_then(|value| serde_json::from_value::<SearchConfig>(value).ok())
-                            .map(|mut search| {
-                                search.engine = ActionEngine::Js;
-                                if search.js_function.is_none() {
-                                    search.js_function = Some("parseSearch".to_string());
-                                }
-                                search.script = None;
-                                search
-                            });
+                        let search = meta.search.map(|value| {
+                            let url_pattern = value.get("url_pattern")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            ActionConfig {
+                                fetch: FetchMethod::Native {
+                                    strategy: NativeFetch::Single,
+                                    target: UrlTarget::Template { url_pattern },
+                                },
+                                parse: Strategy::Js(JsExecutionConfig {
+                                    js_function: Some("parseSearch".to_string()),
+                                    script: None,
+                                }),
+                            }
+                        });
 
                         SourceConfig {
-                            version: 1,
                             script_path: Some("index.js".to_string()),
-                            home: HomeSelectors {
-                                engine: ActionEngine::Js,
-                                js_function: Some("parseHome".to_string()),
-                                script: None,
-                                ..Default::default()
+                            chapters_list_url: None,
+                            home: ActionConfig {
+                                fetch: FetchMethod::default(),
+                                parse: Strategy::Js(JsExecutionConfig {
+                                    js_function: Some("parseHome".to_string()),
+                                    script: None,
+                                }),
                             },
-                            details: DetailsSelectors {
-                                engine: ActionEngine::Js,
-                                js_function: Some("parseBookDetails".to_string()),
-                                script: None,
-                                ..Default::default()
+                            details: ActionConfig {
+                                fetch: FetchMethod::default(),
+                                parse: Strategy::Js(JsExecutionConfig {
+                                    js_function: Some("parseBookDetails".to_string()),
+                                    script: None,
+                                }),
                             },
-                            chapter: ChapterSelectors {
-                                engine: ActionEngine::Js,
-                                js_function: Some("parseChapterContent".to_string()),
-                                script: None,
-                                ..Default::default()
+                            chapter: ActionConfig {
+                                fetch: FetchMethod::default(),
+                                parse: Strategy::Js(JsExecutionConfig {
+                                    js_function: Some("parseChapterContent".to_string()),
+                                    script: None,
+                                }),
                             },
                             search,
+                            genres: vec![],
                         }
                     } else {
                         Default::default()
@@ -211,18 +222,18 @@ pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<Str
                         final_config.script_path = Some(format!("sources/{}/index.js", dir_name));
                     }
 
-                    let src = SourceWithConfig {
-                        id: dir_name.to_string(),
-                        url: meta.url.clone(),
-                        name: meta.name.clone(),
-                        discover_url: meta.discover_url.clone(),
-                        books_url: meta.books_url.clone(),
-                        icon_url: meta.icon_url.clone(),
-                        description: meta.description.clone(),
+                    let src: SourceWithConfig = SourceWithConfig {
+                        source: Source {
+                            id: dir_name.to_string(),
+                            url: meta.url.clone(),
+                            name: meta.name.clone(),
+                            icon_url: meta.icon_url.clone(),
+                            description: meta.description.clone(),
+                        },
                         config: final_config,
                     };
-                    let _ = db.save_source_with_config(&src);
-                    imported.push(src.id.clone());
+                    let _ = db.save_source(&src);
+                    imported.push(src.source.id.clone());
                 }
             }
         }
