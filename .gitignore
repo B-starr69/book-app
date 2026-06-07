@@ -5,3 +5,4 @@ sources/
 target
 /*.md
 !README.md
+.aider*

@@ -2,4 +2,4 @@
 resolver = "2"
 members = [
     "book-core"
-    ]
+    , "book-iced"]
