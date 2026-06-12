@@ -3,7 +3,7 @@ use crate::models::{
     Book, Chapter, ChapterContent, HomeSection, ParsedBookDetails, SearchResult, SourceWithConfig,
 };
 use crate::database::Database;
-
+use crate::defaults::novelfire_source;
 /// Get a book with all details and chapter metadata.
 /// Checks the DB cache first; if not found, fetches from web, caches, and returns.
 pub async fn get_book(
@@ -154,5 +154,17 @@ fn build_book(book_id: &str, source: &SourceWithConfig, details: ParsedBookDetai
                 last_read: 0,
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // Imports the add function from the parent scope
+
+    #[tokio::test] // Identifies this function as a test case
+    async fn test_add() {
+        let novelfire = novelfire_source();
+        let result = get_discover_page(&novelfire).await.unwrap();
+        println!("{:?}",result);
     }
 }

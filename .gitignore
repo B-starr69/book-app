@@ -1,6 +1,7 @@
 covers
 junk
 sources/
+docs
 /library.db
 target
 /*.md

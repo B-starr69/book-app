@@ -30,9 +30,8 @@ pub fn novelfire_source() -> SourceWithConfig {
 fn novelfire_config() -> SourceConfig {
     SourceConfig {
         script_path: None,
-        chapters_list_url: None,
         home: ActionConfig {
-            fetch: FetchMethod::default(),
+            fetch: FetchMethod::Native { strategy: NativeFetch::Single , target: UrlTarget::Static { url: "https://novelfire.net/home".to_string() } },
             parse: Strategy::Rust(HomeSelectors {
                 section: "section.container".to_string(),
                 header: ".section-header h3".to_string(),
@@ -70,11 +69,11 @@ fn novelfire_config() -> SourceConfig {
                 chapters_count: ".header-stats span strong".to_string(),
                 genres: ".categories ul li a".to_string(),
                 summary: ".summary .content".to_string(),
-                chapter_list: "ul.chapter-list li a".to_string(),
+                /* chapter_list: "ul.chapter-list li a".to_string(),
                 chapter_id_pattern: r"/book/[^/]+/([^/?#]+)".to_string(),
                 chapter_date: Some("time.chapter-update".to_string()),
                 chapter_date_attr: None,
-                chapter_id_template: Some("chapter-{n}".to_string()),
+                chapter_id_template: Some("chapter-{n}".to_string()), */
             }),
         },
         chapter: ActionConfig {
@@ -108,6 +107,14 @@ fn novelfire_config() -> SourceConfig {
             }),
         }),
         genres: vec![],
+        chapters_list : { ActionConfig {
+                fetch: FetchMethod::Native {
+                    strategy: NativeFetch::Paginated { config: crate::models::PaginationConfig { page_parameter: (), start_page: () } },
+                    target: ()
+                    },
+                parse: ()
+            }
+        }
     }
 }
 
