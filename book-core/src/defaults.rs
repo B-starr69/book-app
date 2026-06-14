@@ -4,9 +4,9 @@
 //! the hybrid approach: Rust for pure CSS selectors, JS when needed.
 
 use crate::models::{
-    ActionConfig, ChapterSelectors, DetailsSelectors, FetchMethod, HomeSelectors,
-    JsonSearchMapping, LayoutMapping, NativeFetch, SearchPayloadFormat, SearchSelectors,
-    SectionLayout, Source, SourceConfig, SourceWithConfig, Strategy, UrlTarget,
+    ActionConfig, ChapterListSelector, ChapterSelectors, DetailsSelectors, DynamicMode,
+    FetchMethod, HomeSelectors, JsonSearchMapping, LayoutMapping, NativeTarget,
+    SearchSelectors, SectionLayout, Source, SourceConfig, SourceWithConfig, Strategy,
 };
 
 /// Get the default NovelFire source configuration (pure Rust)
@@ -18,6 +18,7 @@ pub fn novelfire_source() -> SourceWithConfig {
         source: Source {
             id: "novelfire".to_string(),
             url: "https://novelfire.net".to_string(),
+            cover_url_pattern: "https://novelfire.net/".to_string(), // Matches layout base mappings
             name: "NovelFire".to_string(),
             icon_url: None,
             description: Some("Novel reading platform with CSS-based structure".to_string()),
@@ -31,7 +32,11 @@ fn novelfire_config() -> SourceConfig {
     SourceConfig {
         script_path: None,
         home: ActionConfig {
-            fetch: FetchMethod::Native { strategy: NativeFetch::Single , target: UrlTarget::Static { url: "https://novelfire.net/home".to_string() } },
+            fetch: FetchMethod::Native {
+                target: NativeTarget::Static {
+                    url: "https://novelfire.net/home".to_string(),
+                },
+            },
             parse: Strategy::Rust(HomeSelectors {
                 section: "section.container".to_string(),
                 header: ".section-header h3".to_string(),
@@ -69,11 +74,6 @@ fn novelfire_config() -> SourceConfig {
                 chapters_count: ".header-stats span strong".to_string(),
                 genres: ".categories ul li a".to_string(),
                 summary: ".summary .content".to_string(),
-                /* chapter_list: "ul.chapter-list li a".to_string(),
-                chapter_id_pattern: r"/book/[^/]+/([^/?#]+)".to_string(),
-                chapter_date: Some("time.chapter-update".to_string()),
-                chapter_date_attr: None,
-                chapter_id_template: Some("chapter-{n}".to_string()), */
             }),
         },
         chapter: ActionConfig {
@@ -87,44 +87,41 @@ fn novelfire_config() -> SourceConfig {
         },
         search: Some(ActionConfig {
             fetch: FetchMethod::Native {
-                strategy: NativeFetch::Single,
-                target: UrlTarget::Template {
+                target: NativeTarget::Dynamic {
                     url_pattern: "https://novelfire.net/ajax/searchLive?keyword={keyword}&type=title".to_string(),
+                    mode: DynamicMode::Single,
                 },
             },
-            parse: Strategy::Rust(SearchSelectors {
-                format: SearchPayloadFormat::Json {
-                    json_results_path: "data".to_string(),
-                    mapping: JsonSearchMapping {
-                        id_key: "slug".to_string(),
-                        title_key: "title".to_string(),
-                        cover_key: "image".to_string(),
-                        chapters_count_key: "total_chapter".to_string(),
-                        genres_key: None,
-                    },
+            parse: Strategy::Rust(SearchSelectors::Json {
+                json_results_path: "data".to_string(),
+                mapping: JsonSearchMapping {
+                    id_key: "slug".to_string(),
+                    title_key: "title".to_string(),
+                    cover_key: "image".to_string(),
+                    chapters_count_key: "total_chapter".to_string(),
+                    genres_key: None,
                 },
-                cover_base_url: Some("https://novelfire.net/".to_string()),
             }),
         }),
         genres: vec![],
-        chapters_list : { ActionConfig {
-                fetch: FetchMethod::Native {
-                    strategy: NativeFetch::Paginated { config: crate::models::PaginationConfig { page_parameter: (), start_page: () } },
-                    target: ()
-                    },
-                parse: ()
-            }
-        }
+        chapters_list: ActionConfig {
+            fetch: FetchMethod::default(),
+            parse: Strategy::Rust(ChapterListSelector {
+                id: "a".to_string(),
+                id_regex: r"/chapter/([^/?#]+)".to_string(),
+                chapter_list: ".chapter-list ul li".to_string(),
+                id_attr: "href".to_string(),
+                title: ".chapter-title".to_string(),
+                date: ".chapter-update".to_string(),
+                date_attr: None,
+            }),
+        },
     }
 }
 
-
 /// Get all default source configurations
 pub fn all_default_sources() -> Vec<SourceWithConfig> {
-    vec![
-        novelfire_source(),
-        // hybrid_example_source(), // Uncomment to test hybrid config
-    ]
+    vec![novelfire_source()]
 }
 
 #[cfg(test)]

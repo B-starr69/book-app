@@ -1,13 +1,18 @@
-use crate::Chapter;
 use crate::configurable_parser::ConfigurableParser;
 use crate::models::DynamicMode::Single;
+use crate::models::*;
 use crate::models::{
-    ActionEngine, FetchMethod, HomeSection, ParsedBookDetails, ParsedChapter,
-    ParsedChapterInfo, SearchResult, SourceConfig, SourceWithConfig, NativeTarget,FetchMethod::Native,DynamicMode
+    ActionEngine, DynamicMode, FetchMethod, FetchMethod::Native, HomeSection, NativeTarget,
+    ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult, SourceConfig,
+    SourceWithConfig,
 };
 use crate::native_parser::NativeParser;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
+use crate::Chapter;
 use core::panic;
+use std::ops::Deref;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
+use rquickjs::function::Func;
+use scraper::selector::Parser;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -71,7 +76,9 @@ impl Fetcher {
 
         Self { client }
     }
-
+    pub fn div_ceil(a: i32, b: i32) -> i32 {
+        (a + b - 1) / b
+    }
     // -------------------------------------------------------------------------
     // URL resolution helpers — read ActionConfig.fetch for all URL construction
     // -------------------------------------------------------------------------
@@ -82,14 +89,17 @@ impl Fetcher {
     } */
 
     /// Resolves the home URL from `home.fetch`. Only handles static or non-paginated dynamic targets.
-    fn resolve_home_url(source: &SourceWithConfig) -> String {
+    pub fn resolve_home_url(source: &SourceWithConfig) -> String {
         match &source.config.home.fetch {
             FetchMethod::Native { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => url.clone(),
                 NativeTarget::Dynamic {
                     url_pattern,
                     mode: DynamicMode::Single,
-                } => url_pattern.replace("{base_url}", &source.source.url).trim_end_matches('/').to_string(),
+                } => url_pattern
+                    .replace("{base_url}", &source.source.url)
+                    .trim_end_matches('/')
+                    .to_string(),
                 _ => panic!(
                     "Expected a static or single-page dynamic target for home URL resolution"
                 ),
@@ -100,7 +110,7 @@ impl Fetcher {
 
     /// Build the book-details URL from `details.fetch`. Only handles static or non-paginated dynamic targets.
     /// Template placeholders: `{book_id}`, `{base_url}`.
-    fn resolve_details_url(source: &SourceWithConfig, book_id: &str) -> String {
+    pub fn resolve_details_url(source: &SourceWithConfig, book_id: &str) -> String {
         match &source.config.details.fetch {
             FetchMethod::Native { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => url.clone(),
@@ -110,15 +120,16 @@ impl Fetcher {
                 } => url_pattern
                     .replace("{book_id}", book_id)
                     .replace("{base_url}", &source.source.url.trim_end_matches('/')),
-                _ => panic!("Expected a static or single-page dynamic target for Details resolution")
-            }
-            _ => panic!("still not emplemented Js, HeadlessBrowser")
-
+                _ => {
+                    panic!("Expected a static or single-page dynamic target for Details resolution")
+                }
+            },
+            _ => panic!("still not emplemented Js, HeadlessBrowser"),
         }
     }
     /// Build the separate chapters-list URL using `chapters_list.fetch`. Only handles static or non-paginated dynamic targets.
     /// Template placeholders: `{book_id}`, `{base_url}`.
-    fn resolve_chapters_list_url(source: &SourceWithConfig, book_id: &str) -> Option<String> {
+    pub fn resolve_chapters_list_url(source: &SourceWithConfig, book_id: &str) -> Option<String> {
         match &source.config.chapters_list.fetch {
             FetchMethod::Native { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => Some(url.clone()),
@@ -130,7 +141,9 @@ impl Fetcher {
                         .replace("{book_id}", book_id)
                         .replace("{base_url}", &source.source.url.trim_end_matches('/')),
                 ),
-                _ => panic!("Expected a static or single-page dynamic target for Chapter List resolution"),
+                _ => panic!(
+                    "Expected a static or single-page dynamic target for Chapter List resolution"
+                ),
             },
             _ => panic!("still not emplemented Js, HeadlessBrowser"),
         }
@@ -148,108 +161,194 @@ impl Fetcher {
                     .replace("{book_id}", book_id)
                     .replace("{chapter_id}", chapter_id)
                     .replace("{base_url}", &source.source.url.trim_end_matches('/')),
-                _ => panic!("Expected a static or single-page dynamic target for Details resolution"),
+                _ => {
+                    panic!("Expected a static or single-page dynamic target for Details resolution")
+                }
             },
             _ => panic!("still not emplemented Js, HeadlessBrowser"),
+        }
+    }
+    /// Build the search URL from `search.fetch`. Only handles static or dynamic native targets.
+    /// Template placeholders: `{keyword}`, `{genre}`, `{base_url}`.
+    fn resolve_search_url(
+        source: &SourceWithConfig,
+        keyword: &str,
+        genre: Option<&str>,
+    ) -> Option<String> {
+        let search_config = source.config.search.as_ref()?;
+
+        match &search_config.fetch {
+            FetchMethod::Native { target } => match target {
+                NativeTarget::Static { url } if !url.is_empty() => Some(url.clone()),
+                NativeTarget::Dynamic { url_pattern, .. } => {
+                    let encoded_keyword = urlencoding::encode(keyword);
+                    let encoded_genre = genre
+                        .map(|g| urlencoding::encode(g).into_owned())
+                        .unwrap_or_default();
+                    let base_url = source.source.url.trim_end_matches('/');
+
+                    let url = url_pattern
+                        .replace("{keyword}", &encoded_keyword)
+                        .replace("{genre}", &encoded_genre)
+                        .replace("{base_url}", base_url);
+
+                    Some(url)
+                }
+                _ => None,
+            },
+            _ => None,
         }
     }
     // -------------------------------------------------------------------------
     // Public fetchers
     // -------------------------------------------------------------------------
     pub async fn get_chapter_list(
-    &self,
-    source: &SourceWithConfig,
-    book_id: &str,
-) -> Option<Vec<Chapter>> {
-    match &source.config.chapters_list.fetch {
-        FetchMethod::Native { target } => match target {
-            // 1. Static URL target
-            NativeTarget::Static { .. } | NativeTarget::Dynamic { ..}  => {
-                let url = Fetcher::resolve_chapters_list_url(source, book_id)?;
-                let html = self.client.get(url).send().await.unwrap().text().await.unwrap();
-                let parser = NativeParser::new(source.config);
-                let t = parser.parse_chapters_only(&html).unwrap();
-                
-            }
+        &self,
+        source: &SourceWithConfig,
+        book_id: &str,
+        nb_chap: i32,
+    ) -> Result<Vec<ParsedChapterInfo>, String> {
+        match &source.config.chapters_list.fetch {
+            FetchMethod::Native { target } => match target {
+                // 1. Static URL target or Dynamic Single (Non-Paginated)
+                NativeTarget::Static { .. }
+                | NativeTarget::Dynamic {
+                    mode: DynamicMode::Single,
+                    ..
+                } => {
+                    let url = Fetcher::resolve_chapters_list_url(source, book_id)
+                        .ok_or_else(|| "Failed to resolve chapters list URL".to_string())?;
 
+                    let html = self
+                        .client
+                        .get(url)
+                        .send()
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .text()
+                        .await
+                        .map_err(|e| e.to_string())?;
 
+                    let parser = NativeParser::new(source.config.clone());
+                    parser.parse_chapters_only(&html)
+                }
 
-            // 3. Dynamic Paginated target (Left blank for your custom implementation)
-            NativeTarget::Dynamic { mode: DynamicMode::Paginated { config }, .. } => {
-                // [Your custom pagination logic goes here]
-                None
-            }
+                // 2. Dynamic Paginated Target
+                NativeTarget::Dynamic {
+                    mode: DynamicMode::Paginated { config },
+                    url_pattern,
+                } => {
+                    let mut chapters: Vec<ParsedChapterInfo> = Vec::new();
+                    let parser = NativeParser::new(source.config.clone());
 
-            _ => None,
-        },
-        // JS engine or HeadlessBrowser execution blocks
-        _ => {
-            // TODO: Handle script or browser engines if applicable
-            None
+                    // Calculate total pages needed based on target chapters vs items per page
+                    let nb_iter = Fetcher::div_ceil(nb_chap, config.nb_per_page);
+                    let end_page = config.start_page + nb_iter;
+
+                    let base_url = source.source.url.trim_end_matches('/');
+
+                    for i in config.start_page..end_page {
+                        let url = url_pattern
+                            .replace("{base_url}", base_url)
+                            .replace("{book_id}", book_id)
+                            .replace("{page_number}", &i.to_string());
+
+                        let html = self
+                            .client
+                            .get(url)
+                            .send()
+                            .await
+                            .map_err(|e| e.to_string())?
+                            .text()
+                            .await
+                            .map_err(|e| e.to_string())?;
+
+                        // Parse this page's chapters and append them to our collection
+                        let mut page_chapters = parser.parse_chapters_only(&html)?;
+                        chapters.append(&mut page_chapters);
+                    }
+
+                    Ok(chapters)
+                }
+            },
+            _ => Err("Engine type or combination not supported yet".to_string()),
         }
     }
-}
+
     pub async fn get_book_details(
         &self,
         source: &SourceWithConfig,
         book_id: String,
-    ) -> Option<ParsedBookDetails> {
-        let url = Self::resolve_details_url(source, &book_id);
-        let resp = self.client.get(&url).send().await.ok()?;
-        let html = resp.text().await.ok()?;
+    ) -> Result<ParsedBookDetails, String> {
+        let html = match &source.config.details.fetch {
+            FetchMethod::Native { .. } => {
+                let url = Fetcher::resolve_details_url(source, &book_id);
+                let resp = self
+                    .client
+                    .get(url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Network request failed: {}", e))?;
 
-        match source.config.details.effective_engine() {
-            ActionEngine::Rust => {
+                resp.text()
+                    .await
+                    .map_err(|e| format!("Failed to read response body: {}", e))?
+            }
+            FetchMethod::Js { js_function: _func } => {
+                todo!("implement js");
+            }
+            FetchMethod::HeadlessBrowser => {
+                panic!("headless not impelemted ")
+            }
+        };
+        match source.config.details.parse {
+            Strategy::Rust(_) => {
                 let parser = NativeParser::new(source.config.clone());
-                self.fetch_book_with_chapters(&parser, source, book_id, &html)
-                    .await
+                parser.parse_book_details(&html, book_id)
             }
-            ActionEngine::Js => {
-                let parser = self.js_parser(source).await?;
-                self.fetch_book_with_chapters(&parser, source, book_id, &html)
-                    .await
-            }
+            Strategy::Js(_) => todo!("todo js parse"),
         }
     }
 
-    pub async fn get_book_metadata(
-        &self,
-        source: &SourceWithConfig,
-        book_id: String,
-    ) -> Option<ParsedBookDetails> {
-        let url = Self::resolve_details_url(source, &book_id);
-        let resp = self.client.get(&url).send().await.ok()?;
-        let html = resp.text().await.ok()?;
+    pub async fn get_home(&self, source: &SourceWithConfig) -> Result<Vec<HomeSection>, String> {
+        // 1. Fetch Stage: Resolve the target and grab the raw HTML payload
+        let html = match &source.config.home.fetch {
+            FetchMethod::Native { .. } => {
+                let url = Fetcher::resolve_home_url(source);
 
-        match source.config.details.effective_engine() {
-            ActionEngine::Rust => {
+                let resp = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Network request failed: {}", e))?;
+
+                resp.text()
+                    .await
+                    .map_err(|e| format!("Failed to read response body: {}", e))?
+            }
+            FetchMethod::Js { js_function: _ } => {
+                return Err(
+                    "JS-driven fetching for home sections is not implemented yet".to_string(),
+                );
+            }
+            FetchMethod::HeadlessBrowser => {
+                return Err(
+                    "Headless browser fetching for home sections is not implemented yet"
+                        .to_string(),
+                );
+            }
+        };
+
+        // 2. Parse Stage: Pass the html string into the designated engine strategy
+        match &source.config.home.parse {
+            Strategy::Rust(_) => {
                 let parser = NativeParser::new(source.config.clone());
-                let mut details = parser.parse_book_details(&html, book_id).ok()?;
-                details.chapters.clear();
-                Some(details)
+                parser.parse_home(&html)
             }
-            ActionEngine::Js => {
-                let parser = self.js_parser(source).await?;
-                let mut details = parser.parse_book_details(&html, book_id).ok()?;
-                details.chapters.clear();
-                Some(details)
-            }
-        }
-    }
-
-    pub async fn get_home(&self, source: &SourceWithConfig) -> Option<Vec<HomeSection>> {
-        let url = Self::resolve_home_url(source);
-        let resp = self.client.get(&url).send().await.ok()?;
-        let html = resp.text().await.ok()?;
-
-        match source.config.home.effective_engine() {
-            ActionEngine::Rust => {
-                let parser = NativeParser::new(source.config.clone());
-                parser.parse_home(&html, &source.source.url).ok()
-            }
-            ActionEngine::Js => {
-                let parser = self.js_parser(source).await?;
-                parser.parse_home(&html, &source.source.url).ok()
+            Strategy::Js(_) => {
+                // Placeholder for your JS sandbox runner
+                Err("JS parsing for home sections is not implemented yet".to_string())
             }
         }
     }
@@ -259,314 +358,131 @@ impl Fetcher {
         source: &SourceWithConfig,
         book_id: String,
         chapter_id: String,
-    ) -> Option<ParsedChapter> {
-        let url = Self::resolve_chapter_url(source, &book_id, &chapter_id);
-        let resp = self.client.get(&url).send().await.ok()?;
-        let html = resp.text().await.ok()?;
+    ) -> Result<ParsedChapter, String> {
+        // 1. Fetch Stage: Identify the strategy, resolve the target URL, and fetch raw content
+        let html = match &source.config.chapter.fetch {
+            FetchMethod::Native { .. } => {
+                let url = Fetcher::resolve_chapter_url(source, &book_id, &chapter_id);
 
-        match source.config.chapter.effective_engine() {
-            ActionEngine::Rust => {
-                let parser = NativeParser::new(source.config.clone());
-                parser.parse_chapter_content(&html).ok()
+                let resp = self
+                    .client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Network request failed: {}", e))?;
+
+                resp.text()
+                    .await
+                    .map_err(|e| format!("Failed to read response body: {}", e))?
             }
-            ActionEngine::Js => {
-                let parser = self.js_parser(source).await?;
-                parser.parse_chapter_content(&html).ok()
+            FetchMethod::Js { js_function: _ } => {
+                return Err(
+                    "JS-driven fetching for chapter content is not implemented yet".to_string(),
+                );
+            }
+            FetchMethod::HeadlessBrowser => {
+                return Err(
+                    "Headless browser fetching for chapter content is not implemented yet"
+                        .to_string(),
+                );
+            }
+        };
+
+        // 2. Parse Stage: Route the raw html string directly to your designated extraction strategy
+        match &source.config.chapter.parse {
+            Strategy::Rust(_) => {
+                let parser = NativeParser::new(source.config.clone());
+                parser.parse_chapter_content(&html)
+            }
+            Strategy::Js(_) => {
+                // Placeholder for your JS sandbox runner
+                Err("JS parsing for chapter content is not implemented yet".to_string())
             }
         }
     }
-
     pub async fn search_books(
-        &self,
+        self,
         source: &SourceWithConfig,
         keyword: &str,
         genre: Option<&str>,
-    ) -> Option<Vec<SearchResult>> {
-        let search_config = source.config.search.as_ref()?;
-        let encoded_keyword = urlencoding::encode(keyword);
-        let encoded_genre = genre
-            .map(|g| urlencoding::encode(g).into_owned())
-            .unwrap_or_default();
+    ) -> Result<Vec<SearchResult>, String> {
+        let search_config = source
+            .config
+            .search
+            .as_ref()
+            .ok_or_else(|| "Search capability is not configured for this source".to_string())?;
 
-        let url = match &search_config.fetch {
-            crate::models::FetchMethod::Native {
-                target: crate::models::UrlTarget::Template { url_pattern },
-                ..
-            } => url_pattern
-                .replace("{keyword}", &encoded_keyword)
-                .replace("{genre}", &encoded_genre),
-            crate::models::FetchMethod::Native {
-                target: crate::models::UrlTarget::Static { url },
-                ..
-            } => url.clone(),
-            _ => return None,
+        // 1. Fetch Stage: Resolve target URLs and fire network requests
+        let resp = match &search_config.fetch {
+            FetchMethod::Native { .. } => {
+                let url = Fetcher::resolve_search_url(source, keyword, genre)
+                    .ok_or_else(|| "Failed to resolve search target URL".to_string())?;
+
+                self.client
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| format!("Search network request failed: {}", e))?
+            }
+            FetchMethod::Js { js_function: _ } => {
+                return Err("JS-driven fetching for searching is not implemented yet".to_string());
+            }
+            FetchMethod::HeadlessBrowser => {
+                return Err(
+                    "Headless browser fetching for searching is not implemented yet".to_string(),
+                );
+            }
         };
 
-        let resp = self.client.get(&url).send().await.ok()?;
-
-        match search_config.effective_engine() {
-            ActionEngine::Rust => {
-                let selectors = match &search_config.parse {
-                    crate::models::Strategy::Rust(ref s) => s,
-                    _ => return None,
-                };
-                match &selectors.format {
-                    crate::models::SearchPayloadFormat::Json {
+        // 2. Parse Stage: Read strategy configurations and hand off payload streams
+        match &search_config.parse {
+            Strategy::Rust(selectors) => match selectors {
+                SearchSelectors::Json {
+                    json_results_path,
+                    mapping,
+                } => {
+                    let parser = NativeParser::new(source.config.clone());
+                    parser.parse_json_search_results(
+                        resp,
+                        mapping.clone(),
                         json_results_path,
-                        mapping,
-                    } => {
-                        self.parse_json_search_results(
-                            resp,
-                            json_results_path,
-                            mapping,
-                            selectors.cover_base_url.as_deref(),
-                        )
-                        .await
-                    }
-                    crate::models::SearchPayloadFormat::Html {
+                    )
+                    .await
+                    .ok_or_else(|| "Failed to parse JSON search results".to_string())
+                }
+                SearchSelectors::Html {
+                    item_selector,
+                    mapping,
+                } => {
+                    let parser = NativeParser::new(source.config.clone());
+
+                    parser
+                    .parse_html_search_results(
+                        resp,
                         item_selector,
                         mapping,
-                    } => {
-                        self.parse_html_search_results(
-                            resp,
-                            source,
-                            item_selector,
-                            mapping,
-                            selectors.cover_base_url.as_deref(),
-                        )
-                        .await
-                    }
-                }
-            }
-            ActionEngine::Js => {
-                let parser = self.js_parser(source).await?;
-                let payload = resp.text().await.ok()?;
-                parser.parse_search_results(&payload).ok()
-            }
-        }
-    }
+                    )
+                    .await
+                    .ok_or_else(|| "Failed to parse HTML search results".to_string())},
+            },
+            Strategy::Js(_) => {
+                let parser = self.js_parser(source).await.ok_or_else(|| {
+                    "Failed to initialize JavaScript parsing environment".to_string()
+                })?;
 
-    /// Fetch a book's details page, parse it, and if the chapters list is empty,
-    /// attempt to fetch chapters from a separate endpoint.
-    async fn fetch_book_with_chapters<P: BookParser>(
-        &self,
-        parser: &P,
-        source: &SourceWithConfig,
-        book_id: String,
-        html: &str,
-    ) -> Option<ParsedBookDetails> {
-        let mut details = parser.parse_book_details(html, book_id.clone()).ok()?;
-        match source.config.chapters_list.fetch {
-            FetchMethod::Native {
-                strategy: NativeFetch::Single,
-                target: UrlTarget::Template { url_pattern },
-            } => {
-                let url = url_pattern.replace("{book_id}", &book_id);
-                if let Ok(resp) = self.client.get(url).send().await {
-                    if let Ok(html) = resp.text().await {
-                        if let Ok(chapters) = parser.parse_chapters_only(&html) {
-                            details.chapters = chapters
-                        }
-                    }
-                }
-            }
-            FetchMethod::Native {
-                strategy: NativeFetch::Paginated { config },
-                target: UrlTarget::Template { url_pattern },
-            } => {}
-        }
-        if let Some(chapters_url) = Self::resolve_chapters_list_url(source, &book_id) {
-            if let Ok(resp) = self.client.get(&chapters_url).send().await {
-                if let Ok(chapters_html) = resp.text().await {
-                    if let Ok(chapters) = parser.parse_chapters_only(&chapters_html) {
-                        details.chapters = chapters;
-                    }
-                }
-            }
-        }
-
-        Some(details)
-    }
-
-    async fn parse_json_search_results(
-        &self,
-        resp: reqwest::Response,
-        json_results_path: &str,
-        mapping: &crate::models::JsonSearchMapping,
-        cover_base_url: Option<&str>,
-    ) -> Option<Vec<SearchResult>> {
-        let json: serde_json::Value = resp.json().await.ok()?;
-
-        let results_array = if json_results_path.is_empty() {
-            json.as_array()?
-        } else {
-            let mut current = &json;
-            for key in json_results_path.split('.') {
-                current = current.get(key)?;
-            }
-            current.as_array()?
-        };
-
-        let results: Vec<SearchResult> = results_array
-            .iter()
-            .filter_map(|item| {
-                let id = item.get(&mapping.id_key)?.as_str()?.to_string();
-                let title = item.get(&mapping.title_key)?.as_str()?.to_string();
-
-                let cover_url = item
-                    .get(&mapping.cover_key)
-                    .and_then(|v| v.as_str())
-                    .map(|s| {
-                        if s.starts_with("http://") || s.starts_with("https://") {
-                            s.to_string()
-                        } else if let Some(base) = cover_base_url {
-                            format!("{}{}", base, s)
-                        } else {
-                            s.to_string()
-                        }
-                    })
-                    .unwrap_or_default();
-
-                let chapters_count = if !mapping.chapters_count_key.is_empty() {
-                    item.get(&mapping.chapters_count_key)
-                        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
-                        .map(|n| n as i32)
-                } else {
-                    None
-                };
-
-                let genres = if let Some(ref genres_key) = mapping.genres_key {
-                    if let Some(val) = item.get(genres_key) {
-                        if let Some(arr) = val.as_array() {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                .collect()
-                        } else if let Some(s) = val.as_str() {
-                            vec![s.to_string()]
-                        } else {
-                            vec![]
-                        }
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    vec![]
-                };
-
-                Some(SearchResult {
-                    id,
-                    title,
-                    cover_url,
-                    chapters_count,
-                    source_id: None,
-                    source_name: None,
-                    genres,
-                })
-            })
-            .collect();
-
-        Some(results)
-    }
-
-    async fn parse_html_search_results(
-        &self,
-        resp: reqwest::Response,
-        source: &SourceWithConfig,
-        item_selector: &str,
-        mapping: &crate::models::HtmlSearchMapping,
-        cover_base_url: Option<&str>,
-    ) -> Option<Vec<SearchResult>> {
-        use regex::Regex;
-        use scraper::{Html, Selector};
-
-        let html = resp.text().await.ok()?;
-        let document = Html::parse_document(&html);
-
-        let item_sel = Selector::parse(item_selector).ok()?;
-        let link_sel = if !mapping.link_selector.is_empty() {
-            Selector::parse(&mapping.link_selector).ok()
-        } else {
-            None
-        };
-        let id_regex = if !mapping.id_pattern.is_empty() {
-            Regex::new(&mapping.id_pattern).ok()
-        } else {
-            None
-        };
-        let title_sel = Selector::parse(&mapping.title_selector).ok()?;
-        let cover_sel = if !mapping.cover_selector.is_empty() {
-            Selector::parse(&mapping.cover_selector).ok()
-        } else {
-            None
-        };
-        let genres_sel = mapping
-            .genres_selector
-            .as_ref()
-            .and_then(|s| Selector::parse(s).ok());
-
-        let results: Vec<SearchResult> = document
-            .select(&item_sel)
-            .filter_map(|item| {
-                let id = if let Some(ref lsel) = link_sel {
-                    let link = item.select(lsel).next()?;
-                    let href = link.value().attr("href")?;
-                    if let Some(ref regex) = id_regex {
-                        regex.captures(href)?.get(1)?.as_str().to_string()
-                    } else {
-                        href.to_string()
-                    }
-                } else {
-                    return None;
-                };
-
-                let title = item
-                    .select(&title_sel)
-                    .next()?
+                let html_payload = resp
                     .text()
-                    .collect::<String>()
-                    .trim()
-                    .to_string();
+                    .await
+                    .map_err(|e| format!("Failed to read search response stream: {}", e))?;
 
-                let cover_url = cover_sel
-                    .as_ref()
-                    .and_then(|sel| {
-                        let img = item.select(sel).next()?;
-                        let src = img
-                            .value()
-                            .attr("src")
-                            .or_else(|| img.value().attr("data-src"))?;
-                        if src.starts_with("http") {
-                            Some(src.to_string())
-                        } else if let Some(base) = cover_base_url {
-                            Some(format!("{}{}", base, src))
-                        } else {
-                            Some(format!("{}{}", source.source.url, src))
-                        }
-                    })
-                    .unwrap_or_default();
+                parser
+                    .parse_search_results(&html_payload)
+                    .map_err(|e| format!("JavaScript search parsing execution failed: {}", e))
+            }
+            }
+        }
 
-                let genres = if let Some(ref sel) = genres_sel {
-                    item.select(sel)
-                        .map(|el| el.text().collect::<String>().trim().to_string())
-                        .collect()
-                } else {
-                    vec![]
-                };
 
-                Some(SearchResult {
-                    id,
-                    title,
-                    cover_url,
-                    chapters_count: None,
-                    source_id: None,
-                    source_name: None,
-                    genres,
-                })
-            })
-            .collect();
-
-        Some(results)
-    }
 
     async fn js_parser(&self, source: &SourceWithConfig) -> Option<ConfigurableParser> {
         let config = self.prepare_js_config(source).await?;

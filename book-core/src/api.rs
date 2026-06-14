@@ -1,9 +1,8 @@
 use crate::getter::Fetcher;
 use crate::models::{
-    Book, Chapter, ChapterContent, HomeSection, ParsedBookDetails, SearchResult, SourceWithConfig,
-};
-use crate::database::Database;
+*};
 use crate::defaults::novelfire_source;
+use crate::database::Database;
 /// Get a book with all details and chapter metadata.
 /// Checks the DB cache first; if not found, fetches from web, caches, and returns.
 pub async fn get_book(
@@ -18,15 +17,17 @@ pub async fn get_book(
 
     // Fetch from web
     let fetcher = Fetcher::new();
-    let details = fetcher.get_book_details(source, book_id.to_string()).await?;
-    let book = build_book(book_id, source, details);
+    let details = fetcher.get_book_details(source, book_id.to_string()).await.unwrap();
+    let parsed_chapters = fetcher.get_chapter_list(source, book_id, details.chapters_count).await.unwrap();
+    let chapters = parsed_chapters.iter().map(|p: &ParsedChapterInfo| p.from()).collect();
+    let book = build_book(book_id, source.source.id.clone(), details,chapters);
     let _ = db.save_book(&book);
     Some(book)
 }
 
 /// Get chapter content.
 /// Checks the DB cache first; if not found, fetches from web, caches, and returns.
-pub async fn get_chapter(
+pub async fn get_chapter_content(
     db: &Database,
     source: &SourceWithConfig,
     book_id: &str,
@@ -56,7 +57,7 @@ pub async fn get_chapter(
 
     // Fetch from web
     let fetcher = Fetcher::new();
-    let parsed = fetcher.get_chapter(source, book_id.to_string(), chapter_id.to_string()).await?;
+    let parsed = fetcher.get_chapter(source, book_id.to_string(), chapter_id.to_string()).await.unwrap();
     let _ = db.cache_chapter_content(book_id, &source.source.id, chapter_id, &parsed.content);
 
     Some(ChapterContent {
@@ -71,7 +72,8 @@ pub async fn get_chapter(
 /// Get discover/home page sections for a source.
 pub async fn get_discover_page(source: &SourceWithConfig) -> Option<Vec<HomeSection>> {
     let fetcher = Fetcher::new();
-    fetcher.get_home(source).await
+    return Some(fetcher.get_home(source).await.unwrap())
+
 }
 
 /// Search books by keyword on a single source, optionally filtered by genre.
@@ -82,11 +84,11 @@ pub async fn search_books(
     genre: Option<&str>,
 ) -> Option<Vec<SearchResult>> {
     let fetcher = Fetcher::new();
-    fetcher.search_books(source, keyword, genre).await
+    return Some(fetcher.search_books(source, keyword, genre).await.unwrap())
 }
 
 /// Search books across multiple sources in parallel, optionally filtered by genre.
-pub async fn search_all_sources(
+/* pub async fn search_all_sources(
     sources: &[SourceWithConfig],
     keyword: &str,
     genre: Option<&str>,
@@ -103,7 +105,7 @@ pub async fn search_all_sources(
             async move {
                 let fetcher = Fetcher::new();
                 match fetcher.search_books(&source, &keyword, genre.as_deref()).await {
-                    Some(mut results) => {
+                    Ok(mut results) => {
                         for result in &mut results {
                             result.source_id = Some(source.source.id.clone());
                             result.source_name = Some(source.source.name.clone());
@@ -119,7 +121,7 @@ pub async fn search_all_sources(
     let results = join_all(futures).await;
     results.into_iter().flatten().collect()
 }
-
+ */
 /// Get all books that are saved/added in the user's library.
 pub fn get_library_books(db: &Database) -> Option<Vec<Book>> {
     db.get_library_books().ok()
@@ -129,10 +131,10 @@ pub fn get_library_books(db: &Database) -> Option<Vec<Book>> {
 // Internal helpers
 // -------------------------------------------------------------------------
 
-fn build_book(book_id: &str, source: &SourceWithConfig, details: ParsedBookDetails) -> Book {
+fn build_book(book_id: &str, source: String, details: ParsedBookDetails,chapters: Vec<Chapter>) -> Book {
     Book {
         id: book_id.to_string(),
-        source_id: source.source.id.clone(),
+        source_id: source,
         title: details.title,
         author: details.author,
         cover_url: details.cover_url,
@@ -143,17 +145,7 @@ fn build_book(book_id: &str, source: &SourceWithConfig, details: ParsedBookDetai
         summary: details.summary,
         in_library: false,
         last_read_timestamp: 0,
-        chapters: details
-            .chapters
-            .into_iter()
-            .map(|c| Chapter {
-                id: c.id,
-                title: c.title,
-                date: c.date,
-                progress: 0.0,
-                last_read: 0,
-            })
-            .collect(),
+        chapters: chapters,
     }
 }
 
@@ -163,8 +155,11 @@ mod tests {
 
     #[tokio::test] // Identifies this function as a test case
     async fn test_add() {
+        let database = Database::new().unwrap();
+        let sources = database.get_sources().unwrap();
         let novelfire = novelfire_source();
         let result = get_discover_page(&novelfire).await.unwrap();
         println!("{:?}",result);
+        println!("{:?}",sources);
     }
 }

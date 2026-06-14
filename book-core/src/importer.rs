@@ -1,243 +1,262 @@
 use crate::database::Database;
-use crate::models::{
-    ActionConfig, FetchMethod, JsExecutionConfig, NativeFetch, Source, SourceConfig, SourceWithConfig,
-    Strategy, UrlTarget,
-};
-use std::path::Path;
-use std::fs;
+use crate::models::{Repository, SourceWithConfig};
 use anyhow::{anyhow, Result};
+use chrono::Utc;
 use reqwest::header::{ACCEPT, USER_AGENT};
+use std::fs;
+use std::path::Path;
 use url::Url;
 
-/// Metadata file structure stored in metadata.json
-#[derive(Debug, serde::Deserialize)]
-struct RepoSource {
-    name: String,
-    url: String,
-    #[serde(rename = "iconUrl")]
-    icon_url: Option<String>,
-    description: Option<String>,
-    #[serde(rename = "version")]
-    _version: Option<String>,
-    #[serde(rename = "author")]
-    _author: Option<String>,
-    #[serde(default)]
-    search: Option<serde_json::Value>,
-    #[serde(default)]
-    config: Option<serde_json::Value>,
-}
-
 /// Import sources from a GitHub repository's `sources/` directory.
-/// Expects structure: sources/<id>/metadata.json, index.js, icon.png
-pub async fn import_from_github(repo_url: &str, db: &Database) -> Result<Vec<String>> {
-    let url = Url::parse(repo_url).map_err(|e| anyhow!("invalid repo url: {}", e))?;
-    let segments: Vec<_> = url.path_segments().ok_or_else(|| anyhow!("invalid repo url"))?.collect();
+/// Expects a structured folder ecosystem: sources/<id>/metadata.json, index.js
+pub async fn import_from_github(
+    repo_url: &str,
+    base_dir: &Path, // FIX: Added base_dir to prevent hardcoded relative path issues
+    db: &Database
+) -> Result<Vec<String>> {
+    // 1. Parse GitHub Repository URL
+    let url = Url::parse(repo_url).map_err(|e| anyhow!("Invalid repository URL: {}", e))?;
+    let segments: Vec<_> = url
+        .path_segments()
+        .ok_or_else(|| anyhow!("Invalid repository path strings"))?
+        .filter(|s| !s.is_empty())
+        .collect();
+
     if segments.len() < 2 {
-        return Err(anyhow!("invalid repo url"));
+        return Err(anyhow!("Repository URL must contain both an owner and a repo name"));
     }
+
     let owner = segments[0];
-    let repo = segments[1];
+    let mut repo = segments[1].to_string();
+
+    if repo.ends_with(".git") {
+        repo = repo.trim_end_matches(".git").to_string();
+    }
 
     let client = reqwest::Client::new();
-    let api = format!("https://api.github.com/repos/{}/{}/contents/sources", owner, repo);
+    let repo_id = format!("{}_{}", owner, repo);
+
+    let repository = Repository {
+        id: repo_id.clone(),
+        url: repo_url.to_string(),
+        display_name: format!("{}/{}", owner, repo),
+        last_synced_commit: None,
+        last_checked_timestamp: Utc::now().timestamp(),
+    };
+
+    // FIX: Propagate database errors instead of silently ignoring them
+    db.save_repository(&repository)?;
+
+    let api_url = format!("https://api.github.com/repos/{}/{}/contents/sources", owner, repo);
+
+    // 2. Fetch the directory index list
     let resp = client
-        .get(&api)
+        .get(&api_url)
         .header(USER_AGENT, "book-app-importer")
         .header(ACCEPT, "application/vnd.github.v3+json")
         .send()
         .await?;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("GitHub API returned {}", resp.status()));
+        return Err(anyhow!("GitHub Directory API request returned status: {}", resp.status()));
     }
 
     let items: serde_json::Value = resp.json().await?;
-    let mut imported = Vec::new();
+    let mut imported_source_ids = Vec::new();
 
-    if let Some(array) = items.as_array() {
-        for item in array {
-            if item.get("type").and_then(|t| t.as_str()) == Some("dir") {
-                if let Some(dir_name) = item.get("name").and_then(|n| n.as_str()) {
-                    let dir_api = format!("https://api.github.com/repos/{}/{}/contents/sources/{}", owner, repo, dir_name);
-                    let dir_resp = client
-                        .get(&dir_api)
-                        .header(USER_AGENT, "book-app-importer")
-                        .header(ACCEPT, "application/vnd.github.v3+json")
-                        .send()
-                        .await?;
+    let Some(directories_array) = items.as_array() else {
+        return Ok(imported_source_ids);
+    };
 
-                    if !dir_resp.status().is_success() {
-                        eprintln!("Failed to list {}/{}: {}", owner, repo, dir_resp.status());
-                        continue;
+    // 3. Process every sub-directory found under `sources/`
+    for item in directories_array {
+        if item.get("type").and_then(|t| t.as_str()) != Some("dir") {
+            continue;
+        }
+        let Some(dir_name) = item.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+
+        let dir_api = format!(
+            "https://api.github.com/repos/{}/{}/contents/sources/{}",
+            owner, repo, dir_name
+        );
+        let dir_resp = client
+            .get(&dir_api)
+            .header(USER_AGENT, "book-app-importer")
+            .header(ACCEPT, "application/vnd.github.v3+json")
+            .send()
+            .await?;
+
+        if !dir_resp.status().is_success() {
+            eprintln!("Skipping 'sources/{}': Content query failed with status {}", dir_name, dir_resp.status());
+            continue;
+        }
+
+        let files: serde_json::Value = dir_resp.json().await?;
+        let mut metadata_txt = String::new();
+        let mut index_js_txt = None;
+        let mut icon_download_url = None;
+
+        // 4. Scan files inside the directory
+        if let Some(files_arr) = files.as_array() {
+            for f in files_arr {
+                let Some(fname) = f.get("name").and_then(|n| n.as_str()) else { continue };
+                let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) else { continue };
+
+                match fname {
+                    "metadata.json" => {
+                        metadata_txt = client.get(download_url).send().await?.text().await?;
                     }
-
-                    let files: serde_json::Value = dir_resp.json().await?;
-                    let mut metadata_txt = String::new();
-                    let mut index_js_txt = None;
-                    let mut icon_download_url = None;
-
-                    if let Some(files_arr) = files.as_array() {
-                        for f in files_arr {
-                            if let Some(fname) = f.get("name").and_then(|n| n.as_str()) {
-                                if fname == "metadata.json" {
-                                    if let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) {
-                                        metadata_txt = client.get(download_url).send().await?.text().await?;
-                                    }
-                                } else if fname == "index.js" {
-                                    if let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) {
-                                        index_js_txt = Some(client.get(download_url).send().await?.text().await?);
-                                    }
-                                } else if fname == "icon.png" || fname == "icon.jpg" || fname == "icon.jpeg" || fname == "icon.webp" {
-                                    if let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) {
-                                        icon_download_url = Some(download_url.to_string());
-                                    }
-                                }
-                            }
-                        }
+                    "index.js" => {
+                        index_js_txt = Some(client.get(download_url).send().await?.text().await?);
                     }
-
-                    if metadata_txt.is_empty() {
-                        eprintln!("No metadata.json in sources/{} - skipping", dir_name);
-                        continue;
+                    n if n.starts_with("icon.") => {
+                        icon_download_url = Some(download_url.to_string());
                     }
-                    let meta: RepoSource = match serde_json::from_str(&metadata_txt) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            eprintln!("Failed to parse metadata.json in {}: {}", dir_name, e);
-                            continue;
-                        }
-                    };
-                    let config = if let Some(config_value) = meta.config.clone() {
-                        serde_json::from_value::<SourceConfig>(config_value).unwrap_or_default()
-                    } else if index_js_txt.is_some() {
-                        let search = meta.search.map(|value| {
-                            let url_pattern = value.get("url_pattern")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            ActionConfig {
-                                fetch: FetchMethod::Native {
-                                    strategy: NativeFetch::Single,
-                                    target: UrlTarget::Template { url_pattern },
-                                },
-                                parse: Strategy::Js(JsExecutionConfig {
-                                    js_function: Some("parseSearch".to_string()),
-                                    script: None,
-                                }),
-                            }
-                        });
-
-                        SourceConfig {
-                            script_path: Some("index.js".to_string()),
-                            chapters_list_url: None,
-                            home: ActionConfig {
-                                fetch: FetchMethod::default(),
-                                parse: Strategy::Js(JsExecutionConfig {
-                                    js_function: Some("parseHome".to_string()),
-                                    script: None,
-                                }),
-                            },
-                            details: ActionConfig {
-                                fetch: FetchMethod::default(),
-                                parse: Strategy::Js(JsExecutionConfig {
-                                    js_function: Some("parseBookDetails".to_string()),
-                                    script: None,
-                                }),
-                            },
-                            chapter: ActionConfig {
-                                fetch: FetchMethod::default(),
-                                parse: Strategy::Js(JsExecutionConfig {
-                                    js_function: Some("parseChapterContent".to_string()),
-                                    script: None,
-                                }),
-                            },
-                            search,
-                            genres: vec![],
-                        }
-                    } else {
-                        Default::default()
-                    };
-
-                    // Ensure the local sources/<id>/ directory exists even for metadata-only sources
-                    let base = Path::new("sources").join(dir_name);
-                    if let Err(e) = fs::create_dir_all(&base) {
-                        eprintln!("Failed to create dir {:?}: {}", base, e);
-                    }
-
-                    // If we downloaded an index.js from the repo, save it under `sources/<id>/index.js`
-                    if let Some(js_text) = index_js_txt.clone() {
-                        let base = Path::new("sources").join(dir_name);
-                        if let Err(e) = fs::create_dir_all(&base) {
-                            eprintln!("Failed to create dir {:?}: {}", base, e);
-                        } else {
-                            let js_path = base.join("index.js");
-                            if let Err(e) = fs::write(&js_path, js_text) {
-                                eprintln!("Failed to write {:?}: {}", js_path, e);
-                            }
-                        }
-                    }
-
-                    // Try to save an icon: prefer icon file from repo, otherwise fall back to metadata.icon_url
-                    if let Some(icon_dl) = icon_download_url.clone() {
-                        let base = Path::new("sources").join(dir_name);
-                        match client.get(&icon_dl).send().await {
-                            Ok(r) => match r.bytes().await {
-                                Ok(bytes) => {
-                                    if let Err(e) = fs::create_dir_all(&base) {
-                                        eprintln!("Failed to create dir {:?}: {}", base, e);
-                                    } else if let Err(e) = fs::write(base.join("icon.png"), &bytes) {
-                                        eprintln!("Failed to write icon for {}: {}", dir_name, e);
-                                    }
-                                }
-                                Err(e) => eprintln!("Failed to download icon bytes {}: {}", icon_dl, e),
-                            },
-                            Err(e) => eprintln!("Failed to fetch icon {}: {}", icon_dl, e),
-                        }
-                    } else if let Some(icon_url) = meta.icon_url.clone() {
-                        let base = Path::new("sources").join(dir_name);
-                        match client.get(&icon_url).send().await {
-                            Ok(r) => match r.bytes().await {
-                                Ok(bytes) => {
-                                    if let Err(e) = fs::create_dir_all(&base) {
-                                        eprintln!("Failed to create dir {:?}: {}", base, e);
-                                    } else if let Err(e) = fs::write(base.join("icon.png"), &bytes) {
-                                        eprintln!("Failed to write icon for {}: {}", dir_name, e);
-                                    }
-                                }
-                                Err(e) => eprintln!("Failed to download icon bytes {}: {}", icon_url, e),
-                            },
-                            Err(e) => eprintln!("Failed to fetch icon {}: {}", icon_url, e),
-                        }
-                    }
-
-                    // If we saved an index.js locally, update script_path to point to it.
-                    let mut final_config = config.clone();
-                    if index_js_txt.is_some() {
-                        final_config.script_path = Some(format!("sources/{}/index.js", dir_name));
-                    }
-
-                    let src: SourceWithConfig = SourceWithConfig {
-                        source: Source {
-                            id: dir_name.to_string(),
-                            url: meta.url.clone(),
-                            name: meta.name.clone(),
-                            icon_url: meta.icon_url.clone(),
-                            description: meta.description.clone(),
-                        },
-                        config: final_config,
-                    };
-                    let _ = db.save_source(&src);
-                    imported.push(src.source.id.clone());
+                    _ => {}
                 }
             }
         }
+
+        if metadata_txt.is_empty() {
+            eprintln!("Skipping 'sources/{}': Required 'metadata.json' file is missing", dir_name);
+            continue;
+        }
+
+        // 5. Strict Type Mapping
+        let mut src: SourceWithConfig = match serde_json::from_str(&metadata_txt) {
+            Ok(valid_model) => valid_model,
+            Err(serde_err) => {
+                eprintln!(
+                    "Skipping 'sources/{}' due to critical strict metadata structural violations: {}",
+                    dir_name, serde_err
+                );
+                continue;
+            }
+        };
+
+        if src.source.id.is_empty() {
+            src.source.id = dir_name.to_string();
+        }
+
+        // 6. Persistence: Create a matching folder block locally
+        // FIX: Uses the passed base_dir instead of hardcoded "sources"
+        let local_directory_base = base_dir.join("sources").join(&src.source.id);
+        if let Err(e) = fs::create_dir_all(&local_directory_base) {
+            eprintln!("Failed to generate local directory structure target {:?}: {}", local_directory_base, e);
+            continue;
+        }
+
+        if let Some(js_payload) = index_js_txt {
+            if let Err(e) = fs::write(local_directory_base.join("index.js"), js_payload) {
+                eprintln!("Failed to write index.js configuration script to disk: {}", e);
+            } else {
+                src.config.script_path = Some(format!("sources/{}/index.js", src.source.id));
+            }
+        }
+
+        if let Some(icon_target_url) = icon_download_url.or_else(|| src.source.icon_url.clone()) {
+            if let Ok(icon_resp) = client.get(&icon_target_url).send().await {
+                if let Ok(icon_bytes) = icon_resp.bytes().await {
+                    let icon_path = local_directory_base.join("icon.png");
+                    // FIX: Log error explicitly instead of silent `let _ =`
+                    if let Err(e) = fs::write(&icon_path, icon_bytes) {
+                        eprintln!("Failed to write icon to disk: {}", e);
+                    } else {
+                        src.source.icon_url = Some(format!("sources/{}/icon.png", src.source.id));
+                    }
+                }
+            }
+        }
+
+        // 7. Store the verified data asset
+        if let Err(db_err) = db.save_source_with_repo(&src, Some(&repo_id)) {
+            eprintln!("Database transaction rejected source entry '{}': {:?}", src.source.id, db_err);
+            continue;
+        }
+
+        imported_source_ids.push(src.source.id.clone());
     }
 
-    Ok(imported)
+    // Update the repository's last checked timestamp upon completion
+    if let Some(mut updated_repo) = db.get_repository(&repo_id)? {
+        updated_repo.last_checked_timestamp = Utc::now().timestamp();
+        // FIX: Propagate error
+        db.save_repository(&updated_repo)?;
+    }
+
+    Ok(imported_source_ids)
 }
 
-/// Check for updates in a GitHub repo for sources imported from that repo.
-/// Returns a vector of (source_id, needs_update, current_sha, latest_sha)
-pub async fn check_for_updates(_repo_url: &str, _db: &Database) -> Result<Vec<(String, bool, Option<String>, Option<String>)>> {
-    Ok(vec![])
+/// Check for structural layout changes against your repository hashes
+pub async fn check_for_updates(
+    repo_url: &str,
+    db: &Database,
+) -> Result<Vec<(String, bool, Option<String>, Option<String>)>> {
+    let url = Url::parse(repo_url).map_err(|e| anyhow!("Invalid repository URL: {}", e))?;
+    let segments: Vec<_> = url
+        .path_segments()
+        .ok_or_else(|| anyhow!("Invalid repository path strings"))?
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if segments.len() < 2 {
+        return Err(anyhow!("Repository URL must contain both an owner and a repo name"));
+    }
+
+    let owner = segments[0];
+    let mut repo = segments[1].to_string();
+    if repo.ends_with(".git") {
+        repo = repo.trim_end_matches(".git").to_string();
+    }
+
+    let repo_id = format!("{}_{}", owner, repo);
+    let client = reqwest::Client::new();
+    let commits_url = format!("https://api.github.com/repos/{}/{}/commits?per_page=1", owner, repo);
+
+    let resp = client
+        .get(&commits_url)
+        .header(USER_AGENT, "book-app-importer")
+        .header(ACCEPT, "application/vnd.github.v3+json")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        return Err(anyhow!("Failed to fetch commits: {}", resp.status()));
+    }
+
+    let commits: serde_json::Value = resp.json().await?;
+    let latest_commit = commits.as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("sha"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+
+    let commit_message = commits.as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|c| c.get("commit"))
+        .and_then(|c| c.get("message"))
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+
+    let mut results = Vec::new();
+
+    if let Some(mut stored_repo) = db.get_repository(&repo_id)? {
+        let has_update = match (&stored_repo.last_synced_commit, &latest_commit) {
+            (Some(stored), Some(latest)) => stored != latest,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+
+        stored_repo.last_checked_timestamp = Utc::now().timestamp();
+        // FIX: Propagate error
+        db.save_repository(&stored_repo)?;
+
+        results.push((repo_id, has_update, latest_commit, commit_message));
+    } else {
+        results.push((repo_id, true, latest_commit, commit_message));
+    }
+
+    Ok(results)
 }

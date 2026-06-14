@@ -7,18 +7,16 @@ fn default_src_attr() -> String { "src".to_string() }
 // =========================================================================
 // 1. Core Source Metadata
 // =========================================================================
-
-/// A source is a website/service that provides books.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Source {
     pub id: String,
     pub url: String,
+    pub cover_url_pattern: String,
     pub name: String,
     pub icon_url: Option<String>,
     pub description: Option<String>,
 }
 
-/// A source bundled with its scraping/parsing configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceWithConfig {
     #[serde(flatten)]
@@ -26,17 +24,15 @@ pub struct SourceWithConfig {
     pub config: SourceConfig,
 }
 
-/// Dynamic genre configuration that a source supports for filtered searching.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GenreInfo {
-    pub name: String, // Human-readable label (e.g., "Action")
-    pub value: String, // Source-specific URL value (e.g., "action" or "1")
+    pub name: String,
+    pub value: String,
 }
 
 // =========================================================================
-// 2. Core Domain Models (The Single Source of Truth)
+// 2. Core Domain Models (Combined Metadata + User State)
 // =========================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Book {
     pub id: String,
@@ -44,7 +40,7 @@ pub struct Book {
     pub title: String,
     pub author: String,
     pub cover_url: String,
-    pub status: String, // e.g., "Ongoing", "Completed"
+    pub status: String,
     pub summary: String,
     pub rating: f32,
     pub chapters_count: i32,
@@ -58,15 +54,14 @@ pub struct Book {
 pub struct Chapter {
     pub id: String,
     pub title: String,
-    pub date: Option<String>,
-    pub progress: f32, // 0.0 to 1.0
-    pub last_read: i64, // Unix timestamp
+    pub date: Option<i64>, // CHANGED: Now strictly i64 Unix timestamp
+    pub progress: f32,     // 0.0 to 1.0
+    pub last_read: i64,    // Unix timestamp
 }
 
 // =========================================================================
 // 3. Data Transfer Objects & Scraper Payloads
 // =========================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChapterContent {
     pub book_id: String,
@@ -80,7 +75,7 @@ pub struct ChapterContent {
 pub struct HomeSection {
     pub title: String,
     pub layout: SectionLayout,
-    pub books: Vec<Book>,
+    pub books: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -92,19 +87,8 @@ pub enum SectionLayout {
     Ranking,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SearchResult {
-    pub id: String,
-    pub title: String,
-    pub cover_url: String,
-    pub chapters_count: Option<i32>,
-    pub source_id: Option<String>,
-    pub source_name: Option<String>,
-    #[serde(default)]
-    pub genres: Vec<String>,
-}
+pub type SearchResult = String;
 
-// Internal-use only parsing structures
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ParsedBookDetails {
     pub title: String,
@@ -115,27 +99,24 @@ pub struct ParsedBookDetails {
     pub chapters_count: i32,
     pub genres: Vec<String>,
     pub summary: String,
-    pub chapters: Vec<ParsedChapterInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ParsedChapterInfo {
     pub id: String,
     pub title: String,
-    pub date: Option<String>,
+    pub date: Option<i64>, // CHANGED: i64
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ParsedChapter {
     pub title: String,
     pub content: String,
-    pub date: Option<String>,
 }
 
 // =========================================================================
 // 4. Extensible Pipeline Engine Configuration
 // =========================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FetchMethod {
@@ -160,10 +141,7 @@ impl Default for FetchMethod {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NativeTarget {
-    Static {
-        url: String,
-    },
-    /// If it is not a static URL, it's considered a dynamic URL pattern (e.g., includes `{page}`, `{query}`)
+    Static { url: String },
     Dynamic {
         url_pattern: String,
         #[serde(flatten)]
@@ -185,7 +163,7 @@ pub enum DynamicMode {
 pub struct PaginationConfig {
     pub page_parameter: String,
     pub start_page: i32,
-    pub nb_per_page: i32
+    pub nb_per_page: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -219,6 +197,7 @@ pub struct JsExecutionConfig {
 pub struct ActionConfig<T> {
     #[serde(default)]
     pub fetch: FetchMethod,
+    #[serde(default)]
     pub parse: Strategy<T>,
 }
 
@@ -260,7 +239,6 @@ impl<T> ActionConfig<T> {
 // =========================================================================
 // 5. Declarative Structural HTML/JSON Selectors
 // =========================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceConfig {
     pub script_path: Option<String>,
@@ -316,9 +294,13 @@ pub struct DetailsSelectors {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChapterListSelector {
     pub id: String,
+    pub id_regex: String,
     pub chapter_list: String,
+    #[serde(default = "default_href_attr")]
+    pub id_attr: String,
     pub title: String,
     pub date: String,
+    pub date_attr: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -329,15 +311,9 @@ pub struct ChapterSelectors {
     pub date_attr: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SearchSelectors {
-    pub format: SearchPayloadFormat,
-    pub cover_base_url: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "response_type", rename_all = "snake_case")]
-pub enum SearchPayloadFormat {
+pub enum SearchSelectors {
     Json {
         json_results_path: String,
         mapping: JsonSearchMapping,
@@ -346,15 +322,6 @@ pub enum SearchPayloadFormat {
         item_selector: String,
         mapping: HtmlSearchMapping,
     },
-}
-
-impl Default for SearchPayloadFormat {
-    fn default() -> Self {
-        SearchPayloadFormat::Json {
-            json_results_path: String::new(),
-            mapping: JsonSearchMapping::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -374,4 +341,33 @@ pub struct HtmlSearchMapping {
     pub cover_selector: String,
     pub chapters_count_selector: String,
     pub genres_selector: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Repository {
+    pub id: String,
+    pub url: String,
+    pub display_name: String,
+    pub last_synced_commit: Option<String>,
+    pub last_checked_timestamp: i64,
+}
+
+impl Default for SearchSelectors {
+    fn default() -> Self {
+        Self::Html {
+            item_selector: String::new(),
+            mapping: HtmlSearchMapping::default(),
+        }
+    }
+}
+impl ParsedChapterInfo {
+    pub fn from(&self) -> Chapter {
+            Chapter {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            date: self.date,
+            progress: 0.0,      // Default to unread (0.0)
+            last_read: 0,       // Default to 0 (Unix epoch, meaning never read)
+        }
+    }
 }

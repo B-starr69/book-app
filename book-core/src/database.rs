@@ -1,4 +1,4 @@
-use crate::models::{Book, Chapter, Source, SourceConfig, SourceWithConfig};
+use crate::models::{Book, Chapter, Repository, Source, SourceConfig, SourceWithConfig};
 use chrono::Utc;
 use rusqlite::{params, Connection, Result};
 
@@ -11,27 +11,39 @@ impl Database {
         let connection = Connection::open("library.db")?;
         connection.execute("PRAGMA foreign_keys = ON", [])?;
 
-        // 1. Sources Table (with config JSON column)
+        // 1. Repositories Tracking Table
         connection.execute(
-            "CREATE TABLE IF NOT EXISTS sources (
+            "CREATE TABLE IF NOT EXISTS repositories (
                 id TEXT PRIMARY KEY,
-                url TEXT NOT NULL,
-                name TEXT NOT NULL,
-                icon_url TEXT,
-                description TEXT,
-                origin_repo TEXT,
-                origin_commit TEXT,
-                config TEXT
-                )",
+                url TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                last_synced_commit TEXT,
+                last_checked_timestamp INTEGER NOT NULL
+            )",
             [],
         )?;
 
-        // 2. Books Table (with metadata)
+        // 2. Sources Table
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS sources (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT,
+                url TEXT NOT NULL,
+                icon_url TEXT,
+                cover_url_pattern TEXT,
+                name TEXT NOT NULL,
+                description TEXT,
+                config TEXT,
+                FOREIGN KEY (repo_id) REFERENCES repositories (id) ON DELETE SET NULL
+            )",
+            [],
+        )?;
+
         connection.execute(
             "CREATE TABLE IF NOT EXISTS books (
                 id TEXT,
                 source_id TEXT,
-                in_library BOOLEAN NOT NULL,
+                in_library BOOLEAN NOT NULL DEFAULT 0,
                 title TEXT,
                 author TEXT,
                 cover_url TEXT,
@@ -40,14 +52,31 @@ impl Database {
                 chapters_count INTEGER,
                 genres TEXT,
                 summary TEXT,
-                chapters_json TEXT,
+                last_synced INTEGER,
+                last_read_timestamp INTEGER DEFAULT 0,
                 PRIMARY KEY (source_id, id),
                 FOREIGN KEY (source_id) REFERENCES sources (id) ON DELETE CASCADE
             )",
             [],
         )?;
 
-        // 3. Chapter Content Cache
+        // 4. Chapters Table (NEW: Normalized)
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS chapters (
+                id TEXT,
+                book_id TEXT,
+                source_id TEXT,
+                title TEXT,
+                date INTEGER,
+                progress REAL DEFAULT 0.0,
+                last_read INTEGER DEFAULT 0,
+                PRIMARY KEY (source_id, book_id, id),
+                FOREIGN KEY (source_id, book_id) REFERENCES books (source_id, id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+
+        // 5. Chapter Content Cache
         connection.execute(
             "CREATE TABLE IF NOT EXISTS chapter_content (
                 book_id TEXT NOT NULL,
@@ -55,123 +84,199 @@ impl Database {
                 chapter_id TEXT NOT NULL,
                 content TEXT NOT NULL,
                 cached_at INTEGER NOT NULL,
-                PRIMARY KEY (source_id, book_id, chapter_id)
+                PRIMARY KEY (source_id, book_id, chapter_id),
+                FOREIGN KEY (source_id, book_id) REFERENCES books (source_id, id) ON DELETE CASCADE
             )",
             [],
         )?;
 
-        // 4. Cover Cache Table (no FK - cache works for any book)
+        // 6. Cover Cache Table
         connection.execute(
             "CREATE TABLE IF NOT EXISTS covers (
                 book_id TEXT NOT NULL,
                 source_id TEXT NOT NULL,
                 image_data BLOB NOT NULL,
                 cached_at INTEGER NOT NULL,
-                PRIMARY KEY (source_id, book_id)
+                PRIMARY KEY (source_id, book_id),
+                FOREIGN KEY (source_id, book_id) REFERENCES books (source_id, id) ON DELETE CASCADE
             )",
             [],
         )?;
 
-        // Migration: Add last_synced column to books if it doesn't exist
-        let _ = connection.execute("ALTER TABLE books ADD COLUMN last_synced INTEGER", []);
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_books_library ON books(in_library)",
+            [],
+        )?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sources_repo ON sources(repo_id)",
+            [],
+        )?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chapters_book ON chapters(source_id, book_id)",
+            [],
+        )?;
 
-        // Normalize any negative progress values stored in chapters_json
-        if let Ok(mut stmt) = connection.prepare("SELECT id, source_id, chapters_json FROM books WHERE chapters_json LIKE '%\"progress\":-1%'") {
-            let mut rows = stmt.query([])?;
-            while let Some(row) = rows.next()? {
-                let id: String = row.get(0)?;
-                let source_id: String = row.get(1)?;
-                let chapters_json: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                if !chapters_json.is_empty() {
-                    if let Ok(mut chapters) = serde_json::from_str::<Vec<Chapter>>(&chapters_json) {
-                        let mut changed = false;
-                        for ch in chapters.iter_mut() {
-                            if ch.progress < 0.0 {
-                                ch.progress = if ch.last_read > 0 { 1.0 } else { 0.0 };
-                                changed = true;
-                            }
-                        }
-                        if changed {
-                            if let Ok(new_json) = serde_json::to_string(&chapters) {
-                                let _ = connection.execute(
-                                    "UPDATE books SET chapters_json = ?1 WHERE id = ?2 AND source_id = ?3",
-                                    params![new_json, id, source_id],
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(Database { connection })
+        let db = Database { connection };
+        Ok(db)
     }
 
-    // ==================== Books ====================
-
-    /// Save a full book with all metadata
-    pub fn save_book(&self, book: &Book) -> Result<()> {
-        let genres_json = serde_json::to_string(&book.genres).unwrap_or_default();
-        let chapters_json = serde_json::to_string(&book.chapters).unwrap_or_default();
-        let timestamp = Utc::now().timestamp();
-
+    // ==================== Repositories ====================
+    pub fn save_repository(&self, repo: &Repository) -> Result<()> {
         self.connection.execute(
-            "INSERT OR REPLACE INTO books (id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json, last_synced)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-            params![
-                book.id,
-                book.source_id,
-                book.in_library,
-                book.title,
-                book.author,
-                book.cover_url,
-                book.rating,
-                book.status,
-                book.chapters_count,
-                genres_json,
-                book.summary,
-                chapters_json,
-                timestamp
-            ],
+            "INSERT OR REPLACE INTO repositories (id, url, display_name, last_synced_commit, last_checked_timestamp)
+            VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![repo.id, repo.url, repo.display_name, repo.last_synced_commit, repo.last_checked_timestamp],
         )?;
         Ok(())
     }
 
-    /// Get all books in library with full metadata
-    pub fn get_library_books(&self) -> Result<Vec<Book>> {
+    pub fn get_repository(&self, id: &str) -> Result<Option<Repository>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json
-             FROM books WHERE in_library = 1"
+            "SELECT id, url, display_name, last_synced_commit, last_checked_timestamp FROM repositories WHERE id = ?1"
         )?;
-
-        let rows = stmt.query_map([], |row| {
-            let genres_json: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
-            let chapters_json: String = row.get::<_, Option<String>>(11)?.unwrap_or_default();
-
-            let genres: Vec<String> = serde_json::from_str(&genres_json).unwrap_or_default();
-            let chapters: Vec<Chapter> = serde_json::from_str(&chapters_json).unwrap_or_default();
-
-            Ok(Book {
+        let mut rows = stmt.query_map([id], |row| {
+            Ok(Repository {
                 id: row.get(0)?,
-                source_id: row.get(1)?,
-                in_library: row.get(2)?,
-                title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                author: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                cover_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                rating: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
-                status: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
-                genres,
-                summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-                last_read_timestamp: 0,
-                chapters,
+                url: row.get(1)?,
+                display_name: row.get(2)?,
+                last_synced_commit: row.get(3)?,
+                last_checked_timestamp: row.get(4)?,
             })
         })?;
-
-        rows.collect()
+        if let Some(res) = rows.next() {
+            return Ok(Some(res?));
+        }
+        Ok(None)
     }
 
-    /// Remove a book from library (keeps it cached)
+    // ==================== Books ====================
+    pub fn save_book(&self, book: &Book) -> Result<()> {
+        // Use transaction for atomic save
+        let tx = self.connection.unchecked_transaction()?;
+        let genres_json = serde_json::to_string(&book.genres).unwrap_or_default();
+        let timestamp = Utc::now().timestamp();
+
+        tx.execute(
+        "INSERT OR REPLACE INTO books (id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, last_synced, last_read_timestamp)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            book.id, book.source_id, book.in_library, book.title, book.author, book.cover_url,
+            book.rating, book.status, book.chapters_count, genres_json, book.summary, timestamp, book.last_read_timestamp
+        ],
+    )?;
+
+        // Clear old chapters to prevent orphaned data if chapters were removed from source
+        tx.execute(
+            "DELETE FROM chapters WHERE source_id = ?1 AND book_id = ?2",
+            params![book.source_id, book.id],
+        )?;
+
+        {
+            let mut insert_chapter_stmt = tx.prepare(
+                "INSERT INTO chapters (id, book_id, source_id, title, date, progress, last_read)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+
+            for chapter in &book.chapters {
+                insert_chapter_stmt.execute(params![
+                    chapter.id,
+                    book.id,
+                    book.source_id,
+                    chapter.title,
+                    chapter.date,
+                    chapter.progress,
+                    chapter.last_read
+                ])?;
+            }
+        } // insert_chapter_stmt is dropped here, releasing the borrow on tx
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn build_book_from_row(&self, row: &rusqlite::Row) -> rusqlite::Result<Book> {
+        let genres_json: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
+        Ok(Book {
+            id: row.get(0)?,
+            source_id: row.get(1)?,
+            in_library: row.get(2)?,
+            title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            author: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            cover_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            rating: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
+            status: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+            chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
+            genres: serde_json::from_str(&genres_json).unwrap_or_default(),
+            summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+            last_read_timestamp: row.get::<_, Option<i64>>(12)?.unwrap_or(0),
+            chapters: Vec::new(), // Populated separately
+        })
+    }
+
+    fn fetch_chapters_for_book(&self, book_id: &str, source_id: &str) -> Result<Vec<Chapter>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, title, date, progress, last_read FROM chapters WHERE source_id = ?1 AND book_id = ?2 ORDER BY date DESC, id DESC"
+        )?;
+        let rows = stmt.query_map(params![source_id, book_id], |row| {
+            Ok(Chapter {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                date: row.get(2)?,
+                progress: row.get(3)?,
+                last_read: row.get(4)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, last_synced, last_read_timestamp
+            FROM books WHERE id = ?1 AND source_id = ?2"
+        )?;
+        let mut rows =
+            stmt.query_map(params![id, source_id], |row| self.build_book_from_row(row))?;
+
+        let mut book = match rows.next() {
+            Some(res) => res?,
+            None => return Ok(None),
+        };
+
+        book.chapters = self.fetch_chapters_for_book(id, source_id)?;
+        Ok(Some(book))
+    }
+
+    pub fn get_library_books(&self) -> Result<Vec<Book>> {
+        let mut books = Vec::new();
+        let mut stmt = self.connection.prepare(
+            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, last_synced, last_read_timestamp
+            FROM books WHERE in_library = 1 ORDER BY last_read_timestamp DESC"
+        )?;
+
+        let book_rows = stmt.query_map([], |row| self.build_book_from_row(row))?;
+        for book_res in book_rows {
+            let mut book = book_res?;
+            book.chapters = self.fetch_chapters_for_book(&book.id, &book.source_id)?;
+            books.push(book);
+        }
+        Ok(books)
+    }
+
+    pub fn get_all_books(&self) -> Result<Vec<Book>> {
+        let mut books = Vec::new();
+        let mut stmt = self.connection.prepare(
+            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, last_synced, last_read_timestamp FROM books"
+        )?;
+
+        let book_rows = stmt.query_map([], |row| self.build_book_from_row(row))?;
+        for book_res in book_rows {
+            let mut book = book_res?;
+            book.chapters = self.fetch_chapters_for_book(&book.id, &book.source_id)?;
+            books.push(book);
+        }
+        Ok(books)
+    }
+
     pub fn remove_from_library(&self, book_id: &str, source_id: &str) -> Result<()> {
         self.connection.execute(
             "UPDATE books SET in_library = 0 WHERE id = ?1 AND source_id = ?2",
@@ -180,78 +285,6 @@ impl Database {
         Ok(())
     }
 
-    /// Get a full book by id (whether in library or just cached)
-    pub fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json
-             FROM books WHERE id = ?1 AND source_id = ?2",
-        )?;
-
-        let mut rows = stmt.query_map(params![id, source_id], |row| {
-            let genres_json: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
-            let chapters_json: String = row.get::<_, Option<String>>(11)?.unwrap_or_default();
-
-            let genres: Vec<String> = serde_json::from_str(&genres_json).unwrap_or_default();
-            let chapters: Vec<Chapter> = serde_json::from_str(&chapters_json).unwrap_or_default();
-
-            Ok(Book {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                in_library: row.get(2)?,
-                title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                author: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                cover_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                rating: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
-                status: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
-                genres,
-                summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-                last_read_timestamp: 0,
-                chapters,
-            })
-        })?;
-
-        if let Some(result) = rows.next() {
-            return Ok(Some(result?));
-        }
-        Ok(None)
-    }
-
-    /// Get all books (whether in library or cached)
-    pub fn get_all_books(&self) -> Result<Vec<Book>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, source_id, in_library, title, author, cover_url, rating, status, chapters_count, genres, summary, chapters_json
-             FROM books"
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let genres_json: String = row.get::<_, Option<String>>(9)?.unwrap_or_default();
-            let chapters_json: String = row.get::<_, Option<String>>(11)?.unwrap_or_default();
-
-            let genres: Vec<String> = serde_json::from_str(&genres_json).unwrap_or_default();
-            let chapters: Vec<Chapter> = serde_json::from_str(&chapters_json).unwrap_or_default();
-
-            Ok(Book {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                in_library: row.get(2)?,
-                title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                author: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-                cover_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-                rating: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
-                status: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-                chapters_count: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
-                genres,
-                summary: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-                last_read_timestamp: 0,
-                chapters,
-            })
-        })?;
-
-        rows.collect()
-    }
-
-    /// Delete a book and its chapters (cascade)
     pub fn delete_book(&self, id: &str, source_id: &str) -> Result<usize> {
         self.connection.execute(
             "DELETE FROM books WHERE id = ?1 AND source_id = ?2",
@@ -259,9 +292,7 @@ impl Database {
         )
     }
 
-    // ==================== Chapter Progress ====================
-
-    /// Update chapter progress within a book's chapters_json
+    // FIX: Atomic update prevents Read-Modify-Write race conditions
     pub fn update_chapter_progress(
         &self,
         book_id: &str,
@@ -269,21 +300,22 @@ impl Database {
         chapter_id: &str,
         progress: f32,
     ) -> Result<()> {
-        if let Some(mut book) = self.get_book(book_id, source_id)? {
-            let timestamp = Utc::now().timestamp();
-            for ch in book.chapters.iter_mut() {
-                if ch.id == chapter_id {
-                    ch.progress = progress;
-                    ch.last_read = timestamp;
-                    break;
-                }
-            }
-            self.save_book(&book)?;
+        let timestamp = Utc::now().timestamp();
+        self.connection.execute(
+            "UPDATE chapters SET progress = ?1, last_read = ?2 WHERE source_id = ?3 AND book_id = ?4 AND id = ?5",
+            params![progress, timestamp, source_id, book_id, chapter_id],
+        )?;
+
+        // Optionally update the book's last_read_timestamp if the chapter is fully read
+        if progress >= 1.0 {
+            self.connection.execute(
+                "UPDATE books SET last_read_timestamp = ?1 WHERE id = ?2 AND source_id = ?3",
+                params![timestamp, book_id, source_id],
+            )?;
         }
         Ok(())
     }
 
-    /// Mark a chapter as read (progress = 1.0)
     pub fn mark_chapter_read(
         &self,
         book_id: &str,
@@ -294,87 +326,38 @@ impl Database {
     }
 
     // ==================== Sources ====================
-
-    /// Insert or update a source with its configuration
-    pub fn save_source(&self, source: &SourceWithConfig) -> Result<()> {
+    pub fn save_source_with_repo(
+        &self,
+        source: &SourceWithConfig,
+        repo_id: Option<&str>,
+    ) -> Result<()> {
         let config_json = serde_json::to_string(&source.config).unwrap_or_default();
         self.connection.execute(
-            "INSERT OR REPLACE INTO sources (id, url, name, icon_url, description, config)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO sources (id, repo_id, url, cover_url_pattern, name, icon_url, description, config)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                source.source.id,
-                source.source.url,
-                source.source.name,
-                source.source.icon_url,
-                source.source.description,
-                config_json
+                source.source.id, repo_id, source.source.url, source.source.cover_url_pattern,
+                source.source.name, source.source.icon_url, source.source.description, config_json
             ],
         )?;
         Ok(())
     }
 
-    /// Update only the config for a source
-    pub fn update_source_config(&self, source_id: &str, config: &SourceConfig) -> Result<()> {
-        let config_json = serde_json::to_string(config).unwrap_or_default();
-        self.connection.execute(
-            "UPDATE sources SET config = ?1 WHERE id = ?2",
-            params![config_json, source_id],
-        )?;
-        Ok(())
-    }
-
-    /// Update the origin repository and commit SHA for a source
-    pub fn update_source_origin(&self, source_id: &str, origin_repo: &str, origin_commit: &str) -> Result<()> {
-        self.connection.execute(
-            "UPDATE sources SET origin_repo = ?1, origin_commit = ?2 WHERE id = ?3",
-            params![origin_repo, origin_commit, source_id],
-        )?;
-        Ok(())
-    }
-
-    /// Delete a source (cascades to books)
-    pub fn delete_source(&self, id: &str) -> Result<usize> {
-        self.connection
-            .execute("DELETE FROM sources WHERE id = ?1", params![id])
-    }
-
-    /// Return a source by id (without config)
-    pub fn get_source_info(&self, id: &str) -> Result<Option<Source>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, icon_url, description FROM sources WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query_map([id], |row| {
-            Ok(Source {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                name: row.get(2)?,
-                icon_url: row.get::<_, Option<String>>(3)?,
-                description: row.get::<_, Option<String>>(4)?,
-            })
-        })?;
-        if let Some(r) = rows.next() {
-            return Ok(Some(r?));
-        }
-        Ok(None)
-    }
-
-    /// Return a source with its config by id
     pub fn get_source(&self, id: &str) -> Result<Option<SourceWithConfig>> {
         let mut stmt = self.connection.prepare(
-            "SELECT id, url, name, icon_url, description, config FROM sources WHERE id = ?1",
+            "SELECT id, url, cover_url_pattern, name, icon_url, description, config FROM sources WHERE id = ?1"
         )?;
         let mut rows = stmt.query_map([id], |row| {
-            let config_json: Option<String> = row.get(5).ok();
-            let config: SourceConfig = config_json
-                .and_then(|json| serde_json::from_str(&json).ok())
-                .unwrap_or_default();
+            let config_json: String = row.get(6)?;
+            let config = serde_json::from_str(&config_json).unwrap_or_default();
             Ok(SourceWithConfig {
                 source: Source {
                     id: row.get(0)?,
                     url: row.get(1)?,
-                    name: row.get(2)?,
-                    icon_url: row.get::<_, Option<String>>(3)?,
-                    description: row.get::<_, Option<String>>(4)?,
+                    cover_url_pattern: row.get(2)?,
+                    name: row.get(3)?,
+                    icon_url: row.get(4)?,
+                    description: row.get(5)?,
                 },
                 config,
             })
@@ -384,24 +367,24 @@ impl Database {
         }
         Ok(None)
     }
-
-    /// Get all sources with their configs
+        /// Returns all sources along with their full scraping/parsing configuration.
     pub fn get_sources(&self) -> Result<Vec<SourceWithConfig>> {
-        let sql = "SELECT id, url, name, icon_url, description, config FROM sources";
-        let mut stmt = self.connection.prepare(sql)?;
+        let mut stmt = self.connection.prepare(
+            "SELECT id, url, cover_url_pattern, name, icon_url, description, config FROM sources"
+        )?;
 
         let source_iter = stmt.query_map([], |row| {
-            let config_json: Option<String> = row.get(5).ok();
-            let config: SourceConfig = config_json
-                .and_then(|json| serde_json::from_str(&json).ok())
-                .unwrap_or_default();
+            let config_json: String = row.get(6)?;
+            let config = serde_json::from_str(&config_json).unwrap_or_default();
+
             Ok(SourceWithConfig {
                 source: Source {
                     id: row.get(0)?,
                     url: row.get(1)?,
-                    name: row.get(2)?,
-                    icon_url: row.get::<_, Option<String>>(3)?,
-                    description: row.get::<_, Option<String>>(4)?,
+                    cover_url_pattern: row.get(2)?,
+                    name: row.get(3)?,
+                    icon_url: row.get(4)?,
+                    description: row.get(5)?,
                 },
                 config,
             })
@@ -410,22 +393,7 @@ impl Database {
         source_iter.collect()
     }
 
-    /// Get sources that were imported from a specific origin repository
-    pub fn get_sources_by_origin(&self, origin_repo: &str) -> Result<Vec<(String, Option<String>)>> {
-        let mut stmt = self
-            .connection
-            .prepare("SELECT id, origin_commit FROM sources WHERE origin_repo = ?1")?;
-
-        let rows = stmt.query_map(params![origin_repo], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
-        })?;
-
-        rows.collect()
-    }
-
     // ==================== Chapter Content Cache ====================
-
-    /// Save chapter content to cache
     pub fn cache_chapter_content(
         &self,
         book_id: &str,
@@ -435,162 +403,48 @@ impl Database {
     ) -> Result<()> {
         let cached_at = Utc::now().timestamp();
         self.connection.execute(
-            "INSERT OR REPLACE INTO chapter_content (book_id, source_id, chapter_id, content, cached_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR REPLACE INTO chapter_content (book_id, source_id, chapter_id, content, cached_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![book_id, source_id, chapter_id, content, cached_at],
         )?;
         Ok(())
     }
 
-    /// Get cached chapter content
     pub fn get_cached_chapter_content(
         &self,
         book_id: &str,
         source_id: &str,
         chapter_id: &str,
     ) -> Result<Option<String>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT content FROM chapter_content
-             WHERE book_id = ?1 AND source_id = ?2 AND chapter_id = ?3",
-        )?;
-
+        let mut stmt = self.connection.prepare("SELECT content FROM chapter_content WHERE book_id = ?1 AND source_id = ?2 AND chapter_id = ?3")?;
         let mut rows = stmt.query_map(params![book_id, source_id, chapter_id], |row| {
             row.get::<_, String>(0)
         })?;
-
         if let Some(result) = rows.next() {
             return Ok(Some(result?));
         }
         Ok(None)
     }
 
-    /// Check if chapter content is cached
-    pub fn is_chapter_cached(
-        &self,
-        book_id: &str,
-        source_id: &str,
-        chapter_id: &str,
-    ) -> Result<bool> {
-        let mut stmt = self.connection.prepare(
-            "SELECT 1 FROM chapter_content
-             WHERE book_id = ?1 AND source_id = ?2 AND chapter_id = ?3",
-        )?;
-
-        let exists = stmt.exists(params![book_id, source_id, chapter_id])?;
-        Ok(exists)
-    }
-
-    /// Delete cached chapter content for a book
-    pub fn clear_chapter_cache(&self, book_id: &str, source_id: &str) -> Result<usize> {
-        self.connection.execute(
-            "DELETE FROM chapter_content WHERE book_id = ?1 AND source_id = ?2",
-            params![book_id, source_id],
-        )
-    }
-
-    /// Get count of cached chapters for a book
-    pub fn get_cached_chapter_count(&self, book_id: &str, source_id: &str) -> Result<i32> {
-        let mut stmt = self.connection.prepare(
-            "SELECT COUNT(*) FROM chapter_content WHERE book_id = ?1 AND source_id = ?2",
-        )?;
-
-        let count: i32 = stmt.query_row(params![book_id, source_id], |row| row.get(0))?;
-        Ok(count)
-    }
-
     // ==================== Cover Cache ====================
-
-    /// Save cover image to cache
     pub fn cache_cover(&self, book_id: &str, source_id: &str, image_data: &[u8]) -> Result<()> {
         let cached_at = Utc::now().timestamp();
         self.connection.execute(
-            "INSERT OR REPLACE INTO covers (book_id, source_id, image_data, cached_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO covers (book_id, source_id, image_data, cached_at) VALUES (?1, ?2, ?3, ?4)",
             params![book_id, source_id, image_data, cached_at],
         )?;
         Ok(())
     }
 
-    /// Get cached cover image
     pub fn get_cached_cover(&self, book_id: &str, source_id: &str) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT image_data FROM covers WHERE book_id = ?1 AND source_id = ?2",
-        )?;
-
-        let mut rows = stmt.query_map(params![book_id, source_id], |row| {
-            row.get::<_, Vec<u8>>(0)
-        })?;
-
+        let mut stmt = self
+            .connection
+            .prepare("SELECT image_data FROM covers WHERE book_id = ?1 AND source_id = ?2")?;
+        let mut rows =
+            stmt.query_map(params![book_id, source_id], |row| row.get::<_, Vec<u8>>(0))?;
         if let Some(result) = rows.next() {
             return Ok(Some(result?));
         }
         Ok(None)
-    }
-
-    /// Check if cover is cached
-    pub fn is_cover_cached(&self, book_id: &str, source_id: &str) -> Result<bool> {
-        let mut stmt = self.connection.prepare(
-            "SELECT 1 FROM covers WHERE book_id = ?1 AND source_id = ?2",
-        )?;
-
-        let exists = stmt.exists(params![book_id, source_id])?;
-        Ok(exists)
-    }
-
-    /// Delete cached cover for a book
-    pub fn delete_cached_cover(&self, book_id: &str, source_id: &str) -> Result<usize> {
-        self.connection.execute(
-            "DELETE FROM covers WHERE book_id = ?1 AND source_id = ?2",
-            params![book_id, source_id],
-        )
-    }
-
-    // ==================== Sync Tracking ====================
-
-    /// Update last_synced timestamp for a book
-    pub fn update_last_synced(&self, book_id: &str, source_id: &str) -> Result<()> {
-        let timestamp = Utc::now().timestamp();
-        self.connection.execute(
-            "UPDATE books SET last_synced = ?1 WHERE id = ?2 AND source_id = ?3",
-            params![timestamp, book_id, source_id],
-        )?;
-        Ok(())
-    }
-
-    /// Get last_synced timestamp for a book
-    pub fn get_last_synced(&self, book_id: &str, source_id: &str) -> Result<Option<i64>> {
-        let mut stmt = self.connection.prepare(
-            "SELECT last_synced FROM books WHERE id = ?1 AND source_id = ?2",
-        )?;
-
-        let mut rows = stmt.query_map(params![book_id, source_id], |row| {
-            row.get::<_, Option<i64>>(0)
-        })?;
-
-        if let Some(result) = rows.next() {
-            return Ok(result?);
-        }
-        Ok(None)
-    }
-
-    /// Check if a book needs to be re-synced (older than specified days)
-    pub fn needs_sync(&self, book_id: &str, source_id: &str, max_age_days: i64) -> bool {
-        match self.get_last_synced(book_id, source_id) {
-            Ok(Some(last_synced)) => {
-                let now = Utc::now().timestamp();
-                let age_seconds = now - last_synced;
-                let max_age_seconds = max_age_days * 24 * 60 * 60;
-                age_seconds > max_age_seconds
-            }
-            _ => true, // No last_synced means it needs sync
-        }
-    }
-
-    /// Clear all cached data (chapters and covers)
-    pub fn clear_all_cache(&self) -> Result<()> {
-        self.connection.execute("DELETE FROM chapter_content", [])?;
-        self.connection.execute("DELETE FROM covers", [])?;
-        Ok(())
     }
 
     pub fn close(self) -> Result<()> {

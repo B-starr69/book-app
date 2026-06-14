@@ -1,10 +1,9 @@
 use crate::models::{
-    Book, HomeSection, ParsedBookDetails, ParsedChapter, ParsedChapterInfo,
-    SourceConfig,
+    HomeSection, ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SourceConfig, Strategy,JsonSearchMapping
 };
 use crate::parser_utils::{
-    determine_layout, extract_attr, extract_all_text, extract_id_from_pattern,
-    extract_text, make_absolute_url, parse_selector, sanitize_chapter_html,
+    determine_layout, extract_all_text, extract_attr, extract_id_from_pattern, extract_text,
+    parse_selector, sanitize_chapter_html,
 };
 use regex::Regex;
 use scraper::Html;
@@ -19,7 +18,7 @@ impl NativeParser {
         Self { config }
     }
 
-    pub fn parse_home(&self, html: &str, base_url: &str) -> Result<Vec<HomeSection>, String> {
+    pub fn parse_home(&self, html: &str) -> Result<Vec<HomeSection>, String> {
         let document = Html::parse_document(html);
         let selectors = match &self.config.home.parse {
             crate::models::Strategy::Rust(ref s) => s,
@@ -33,21 +32,10 @@ impl NativeParser {
         let book_id_regex = Regex::new(&selectors.book_id_pattern)
             .map_err(|e| format!("Invalid book_id_pattern: {}", e))?;
 
-        let cover_sel = if !selectors.cover.is_empty() {
-            Some(parse_selector(&selectors.cover)?)
-        } else {
-            None
-        };
-
-        let title_sel = if !selectors.title.is_empty() {
-            Some(parse_selector(&selectors.title)?)
-        } else {
-            None
-        };
-
-        let sections = document
+        let sections: Vec<HomeSection> = document
             .select(&section_sel)
             .filter_map(|section_node| {
+                // 1. Extract and clean the section header title string
                 let title = section_node
                     .select(&header_sel)
                     .next()?
@@ -58,37 +46,25 @@ impl NativeParser {
 
                 let layout = determine_layout(&title, &selectors.layout_mapping);
 
-                let books: Vec<Book> = section_node
+                // 2. Map and parse child element items into string item identifiers
+                let books: Vec<String> = section_node
                     .select(&item_sel)
                     .filter_map(|item| {
-                        let link = item.select(&link_sel).next()?;
-                        let href = link.value().attr(&selectors.href_attr)?;
+                        // Find the structural anchor/link element inside the layout item context
+                        let link_node = item.select(&link_sel).next()?;
+                        let href = link_node.value().attr(&selectors.href_attr)?;
+
+                        // Extract the uniquely identifiable ID segment via pattern string matching
                         let id = extract_id_from_pattern(href, &book_id_regex)?;
 
-                        let book_title = title_sel.as_ref().and_then(|sel| {
-                            let title_elem = item.select(sel).next()?;
-                            if let Some(attr) = &selectors.title_attr {
-                                title_elem.value().attr(attr).map(|s| s.to_string())
-                            } else {
-                                Some(title_elem.text().collect::<String>().trim().to_string())
-                            }
-                        }).unwrap_or_default();
+                        // NOTE: If you need to map images or save minimal details to a side-cache db,
+                        // you would extract `cover_url = item.select(...)` here.
 
-                        let cover_url = cover_sel.as_ref().and_then(|sel| {
-                            let img = item.select(sel).next()?;
-                            let raw_url = selectors
-                                .cover_attr_alt
-                                .as_ref()
-                                .and_then(|alt| img.value().attr(alt))
-                                .or_else(|| img.value().attr(&selectors.cover_attr));
-
-                            raw_url.map(|s| make_absolute_url(s, base_url))
-                        }).unwrap_or_default();
-
-                        Some(Book { id, title: book_title, cover_url, ..Default::default() })
+                        Some(id)
                     })
                     .collect();
 
+                // Prevent returning empty category lists
                 if books.is_empty() {
                     return None;
                 }
@@ -96,14 +72,13 @@ impl NativeParser {
                 Some(HomeSection {
                     title,
                     layout,
-                    books,
+                    books, // Successfully maps directly to Vec<String>
                 })
             })
             .collect();
 
         Ok(sections)
     }
-
 
     pub fn parse_book_details(&self, html: &str, _id: String) -> Result<ParsedBookDetails, String> {
         let document = Html::parse_document(html);
@@ -142,44 +117,6 @@ impl NativeParser {
         let genres = extract_all_text(&document, &sel.genres);
         let summary = extract_text(&document, &sel.summary).unwrap_or_default();
 
-        let chapters = if let Some(ref template) = sel.chapter_id_template {
-            (1..=chapters_count)
-                .map(|n| ParsedChapterInfo {
-                    id: template.replace("{n}", &n.to_string()),
-                    title: format!("Chapter {}", n),
-                    date: None,
-                })
-                .collect()
-        } else {
-            let chapter_id_regex = Regex::new(&sel.chapter_id_pattern)
-                .map_err(|e| format!("Invalid chapter_id_pattern: {}", e))?;
-
-            if let Ok(chapter_sel) = scraper::Selector::parse(&sel.chapter_list) {
-                document
-                    .select(&chapter_sel)
-                    .filter_map(|el| {
-                        let href = el.value().attr("href")?;
-                        let id = extract_id_from_pattern(href, &chapter_id_regex)?;
-                        let title = el.text().collect::<String>().trim().to_string();
-
-                        let date = sel.chapter_date_attr.as_ref().and_then(|attr| {
-                            el.value().attr(attr).map(|s| s.to_string())
-                        }).or_else(|| {
-                            sel.chapter_date.as_ref().and_then(|date_sel| {
-                                scraper::Selector::parse(date_sel).ok().and_then(|s| {
-                                    el.select(&s).next().map(|e| e.text().collect::<String>().trim().to_string())
-                                })
-                            })
-                        });
-
-                        Some(ParsedChapterInfo { id, title, date })
-                    })
-                    .collect()
-            } else {
-                vec![]
-            }
-        };
-
         Ok(ParsedBookDetails {
             title,
             author,
@@ -189,57 +126,70 @@ impl NativeParser {
             chapters_count,
             genres,
             summary,
-            chapters,
         })
     }
 
-    pub fn parse_chapters_only(&self, html: &str) -> Result<Vec<ParsedChapterInfo>, String> {
+    pub fn parse_chapters_list(&self, html: &str) -> Result<Vec<ParsedChapterInfo>, String> {
         let document = Html::parse_document(html);
-        let sel = match &self.config.details.parse {
-            crate::models::Strategy::Rust(ref s) => s,
-            _ => return Err("Details strategy is JS, cannot parse natively".to_string()),
+
+        // 1. Extract the declarative selector configurations
+        let sel = match &self.config.chapters_list.parse {
+            Strategy::Rust(ref s) => s,
+            _ => return Err("Chapters list strategy is not native Rust".to_string()),
         };
 
-        let chapter_id_regex = Regex::new(&sel.chapter_id_pattern)
-            .map_err(|e| format!("Invalid chapter_id_pattern: {}", e))?;
+        // 2. Pre-compile Regex and Selectors safely upfront to eliminate silent runtime failures
+        let chapter_id_regex = Regex::new(&sel.id_regex)
+            .map_err(|e| format!("Invalid chapter id_regex layout pattern: {}", e))?;
 
-        let chapters = if let Ok(chapter_sel) = scraper::Selector::parse(&sel.chapter_list) {
-            document
-                .select(&chapter_sel)
-                .filter_map(|el| {
-                    let href = el.value().attr("href")?;
-                    let id = extract_id_from_pattern(href, &chapter_id_regex)?;
+        let list_item_selector = scraper::Selector::parse(&sel.chapter_list)
+            .map_err(|e| format!("Invalid structural chapter_list CSS selector: {:?}", e))?;
 
-                    let title = el
-                        .select(&scraper::Selector::parse(".chapter-title, strong.chapter-title").ok()?)
-                        .next()
-                        .map(|e| e.text().collect::<String>().trim().to_string())
-                        .or_else(|| {
-                            let text = el.text().collect::<String>();
-                            let clean = text.trim().to_string();
-                            if clean.is_empty() {
-                                None
-                            } else {
-                                Some(clean)
-                            }
-                        })?;
+        let title_selector = scraper::Selector::parse(&sel.title)
+            .map_err(|e| format!("Invalid structural title CSS selector: {:?}", e))?;
 
-                    let date = el
-                        .select(&scraper::Selector::parse("time, .chapter-update").ok()?)
-                        .next()
-                        .map(|e| e.text().collect::<String>().trim().to_string())
-                        .or_else(|| {
-                            sel.chapter_date_attr.as_ref().and_then(|attr| {
-                                el.value().attr(attr).map(|s| s.to_string())
-                            })
-                        });
+        let date_selector = scraper::Selector::parse(&sel.date)
+            .map_err(|e| format!("Invalid structural date CSS selector: {:?}", e))?;
 
-                    Some(ParsedChapterInfo { id, title, date })
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        // 3. Document DOM Traversal Iteration Block
+        let chapters = document
+            .select(&list_item_selector)
+            .filter_map(|el| {
+                // Extract the target link attribute using config instead of hardcoded "href"
+                let href = el.value().attr(&sel.id_attr)?;
+                let id = extract_id_from_pattern(href, &chapter_id_regex)?;
+
+                // Extract the Title: Try config sub-selector target first, fallback to node text stream
+                let title = el
+                    .select(&title_selector)
+                    .next()
+                    .map(|e| e.text().collect::<String>().trim().to_string())
+                    .or_else(|| {
+                        let text = el.text().collect::<String>();
+                        let clean = text.trim().to_string();
+                        if clean.is_empty() {
+                            None
+                        } else {
+                            Some(clean)
+                        }
+                    })?;
+
+                // Extract the Date: Checks inner text node or fallback tag attributes (like datetime="")
+                let date = el
+                    .select(&date_selector)
+                    .next()
+                    .map(|e| {
+                        if let Some(ref attr_target) = sel.date_attr {
+                            e.value().attr(attr_target).map(|s| s.trim().to_string())
+                        } else {
+                            Some(e.text().collect::<String>().trim().to_string())
+                        }
+                    })
+                    .flatten().unwrap().parse::<i64>().unwrap(); // Flattens the nested Option<Option<String>> cleanly
+
+                Some(ParsedChapterInfo { id, title, date:Some(date) })
+            })
+            .collect();
 
         Ok(chapters)
     }
@@ -263,20 +213,84 @@ impl NativeParser {
             String::new()
         };
 
-        let date = sel.date.as_ref().and_then(|date_selector| {
-            if let Some(attr) = &sel.date_attr {
-                extract_attr(&document, date_selector, attr)
-            } else {
-                extract_text(&document, date_selector)
-            }
-        });
-
         let content = sanitize_chapter_html(&content);
 
-        Ok(ParsedChapter {
-            title,
-            content,
-            date,
-        })
+        Ok(ParsedChapter { title, content })
+    }
+
+    pub async fn parse_json_search_results(
+        &self,
+        resp: reqwest::Response,
+        mapping: JsonSearchMapping,
+        json_results_path: &str,
+    ) -> Option<Vec<String>> {
+        let json: serde_json::Value = resp.json().await.ok()?;
+
+        let results_array = if json_results_path.is_empty() {
+            json.as_array()?
+        } else {
+            let mut current = &json;
+            for key in json_results_path.split('.') {
+                current = current.get(key)?;
+            }
+            current.as_array()?
+        };
+
+        let results: Vec<String> = results_array
+            .iter()
+            .filter_map(|item| {
+                let id = item.get(&mapping.id_key)?.as_str()?.to_string();
+
+                Some(id)
+            })
+            .collect();
+
+        Some(results)
+    }
+
+    pub async fn parse_html_search_results(
+        &self,
+        resp: reqwest::Response,
+        item_selector: &str,
+        mapping: &crate::models::HtmlSearchMapping,
+    ) -> Option<Vec<String>> {
+        use regex::Regex;
+        use scraper::{Html, Selector};
+
+        let html = resp.text().await.ok()?;
+        let document = Html::parse_document(&html);
+
+        let item_sel = Selector::parse(item_selector).ok()?;
+        let link_sel = if !mapping.link_selector.is_empty() {
+            Selector::parse(&mapping.link_selector).ok()
+        } else {
+            None
+        };
+        let id_regex = if !mapping.id_pattern.is_empty() {
+            Regex::new(&mapping.id_pattern).ok()
+        } else {
+            None
+        };
+
+        let results: Vec<String> = document
+            .select(&item_sel)
+            .filter_map(|item| {
+                let id = if let Some(ref lsel) = link_sel {
+                    let link = item.select(lsel).next()?;
+                    let href = link.value().attr("href")?;
+                    if let Some(ref regex) = id_regex {
+                        regex.captures(href)?.get(1)?.as_str().to_string()
+                    } else {
+                        href.to_string()
+                    }
+                } else {
+                    return None;
+                };
+
+                Some(id)
+            })
+            .collect();
+
+        Some(results)
     }
 }
