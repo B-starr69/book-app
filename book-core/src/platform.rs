@@ -57,6 +57,32 @@ pub fn get_db_path() -> PathBuf {
     }
 }
 
+/// Get the directory where imported book files (epub, mobi, pdf) are stored.
+pub fn get_books_dir() -> PathBuf {
+    let app_dir = get_app_data_dir();
+    let books_dir = app_dir.join("books");
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = std::fs::create_dir_all(&books_dir);
+    }
+
+    books_dir
+}
+
+/// Get the directory where webnovel chapter indexes and HTML files are stored.
+pub fn get_webnovels_dir() -> PathBuf {
+    let app_dir = get_app_data_dir();
+    let webnovels_dir = app_dir.join("webnovels");
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = std::fs::create_dir_all(&webnovels_dir);
+    }
+
+    webnovels_dir
+}
+
 /// Get the covers cache directory
 pub fn get_covers_dir() -> PathBuf {
     let app_dir = get_app_data_dir();
@@ -75,8 +101,7 @@ pub fn init_logging() {
     #[cfg(target_os = "android")]
     {
         android_logger::init_once(
-            android_logger::Config::default()
-                .with_min_level(log::Level::Debug),
+            android_logger::Config::default().with_min_level(log::Level::Debug),
         );
     }
 

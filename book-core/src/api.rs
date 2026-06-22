@@ -1,4 +1,4 @@
-use crate::getter::Fetcher;
+use crate::fetcher::Fetcher;
 use crate::models::{
 *};
 use crate::defaults::novelfire_source;

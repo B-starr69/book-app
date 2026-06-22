@@ -1,15 +1,11 @@
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Alignment, Element, Length, Task};
-use std::sync::Arc;
 use std::thread;
 use tokio::sync::{mpsc, oneshot};
 
 use book_core::database::Database;
 use book_core::models::Book;
-use book_core::{
-    HomeSection, SourceWithConfig,
-    api,
-};
+use book_core::{HomeSection, SourceWithConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -43,8 +39,7 @@ enum Message {
 pub enum DbCommand {
     GetLibraryBooks {
         responder: oneshot::Sender<Vec<Book>>,
-    }
-
+    },
 }
 
 pub enum NetCommand {
@@ -68,9 +63,20 @@ struct MyApp {
 
 impl MyApp {
     pub fn new() -> (Self, Task<Message>) {
-        let database = Database::new().unwrap();
-        let mut sources = database.get_sources().unwrap();
-        let library_books = database.get_library_books().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create startup runtime");
+
+        let (mut sources, library_books) = rt.block_on(async {
+            let database = Database::open_local()
+                .await
+                .expect("Failed to open local database");
+            let sources = database.get_sources().await.unwrap_or_default();
+            let library_books = database.get_library_books().await.unwrap_or_default();
+            (sources, library_books)
+        });
+
         if sources.is_empty() {
             sources.push(book_core::defaults::novelfire_source());
         }
@@ -78,15 +84,27 @@ impl MyApp {
         // DB thread
         let (db_tx, mut db_rx) = mpsc::channel::<DbCommand>(100);
         thread::spawn(move || {
-            let db = Database::new().unwrap();
-            while let Some(command) = db_rx.blocking_recv() {
-                match command {
-                    DbCommand::GetLibraryBooks { responder } => {
-                        let books = book_core::api::get_library_books(&db).unwrap_or_default();
-                        let _ = responder.send(books);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create database runtime");
+
+            rt.block_on(async move {
+                let db = Database::open_local()
+                    .await
+                    .expect("Failed to open local database");
+
+                while let Some(command) = db_rx.recv().await {
+                    match command {
+                        DbCommand::GetLibraryBooks { responder } => {
+                            let books = book_core::api::get_library_books(&db)
+                                .await
+                                .unwrap_or_default();
+                            let _ = responder.send(books);
+                        }
                     }
                 }
-            }
+            });
         });
 
         // Network thread — owns its own Tokio runtime so reqwest/hyper work correctly
@@ -102,8 +120,8 @@ impl MyApp {
                     match cmd {
                         NetCommand::FetchDiscoverPage { source, responder } => {
                             let result = book_core::api::get_discover_page(&source).await;
-                            println!("{:?}",result);
-                            let _ = responder.send(result);
+                            println!("{:?}", result);
+                            let _ = responder.send(result.ok());
                         }
                     }
                 }
@@ -154,7 +172,9 @@ impl MyApp {
 
                 Task::future(async move {
                     let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx.send(DbCommand::GetLibraryBooks { responder: resp_tx }).await;
+                    let _ = tx
+                        .send(DbCommand::GetLibraryBooks { responder: resp_tx })
+                        .await;
                     let books = resp_rx.await.unwrap_or_default();
                     Message::LibraryLoaded(books)
                 })
@@ -170,15 +190,17 @@ impl MyApp {
                 self.is_loading_discover = true;
                 let tx = self.net_tx.clone();
                 let source = self.sources.first().cloned().unwrap();
-                println!("{:?}",source);
+                println!("{:?}", source);
                 Task::future(async move {
                     let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx.send(NetCommand::FetchDiscoverPage {
-                        source,
-                        responder: resp_tx,
-                    }).await;
+                    let _ = tx
+                        .send(NetCommand::FetchDiscoverPage {
+                            source,
+                            responder: resp_tx,
+                        })
+                        .await;
                     let result = resp_rx.await.unwrap_or(None);
-                    println!("{:?}",result);
+                    println!("{:?}", result);
                     Message::DiscoverDataLoaded(result)
                 })
             }
@@ -206,7 +228,7 @@ impl MyApp {
             .into()
     }
 
-    fn view(&self) -> Element<Message> {
+    fn view(&self) -> Element<'_, Message> {
         let content = match self.active_tab {
             Tab::Library => self.render_home(),
             Tab::Discover => self.render_discover(),
@@ -230,7 +252,7 @@ impl MyApp {
         column![main_area, nav_bar].into()
     }
 
-    fn render_home(&self) -> Element<Message> {
+    fn render_home(&self) -> Element<'_, Message> {
         if self.is_loading_library {
             return text("Loading library...").into();
         }
@@ -240,44 +262,40 @@ impl MyApp {
         scrollable(column(self.library_books.iter().map(|book| book.view()))).into()
     }
 
-    fn render_discover(&self) -> Element<Message> {
+    fn render_discover(&self) -> Element<'_, Message> {
         if self.is_loading_discover {
             return text("Loading...").into();
         }
         if self.discover_sections.is_empty() {
             return text("Nothing to show.").into();
         }
-        scrollable(
-            column(self.discover_sections.iter().map(|section| {
-                column![
-                    text(&section.title).size(18),
-                ]
-                .into()
-            }))
-        ).into()
+        scrollable(column(
+            self.discover_sections
+                .iter()
+                .map(|section| column![text(&section.title).size(18),].into()),
+        ))
+        .into()
     }
 
-    fn render_search(&self) -> Element<Message> {
+    fn render_search(&self) -> Element<'_, Message> {
         text("search").into()
     }
 
-    fn render_settings(&self) -> Element<Message> {
+    fn render_settings(&self) -> Element<'_, Message> {
         match &self.settings_state.active_tab {
             SettingsTab::None => column![
                 button("General settings")
                     .on_press(Message::SettingsChange(SettingsTab::GeneralSettings)),
-                button("Manage sources")
-                    .on_press(Message::SettingsChange(SettingsTab::Sources)),
+                button("Manage sources").on_press(Message::SettingsChange(SettingsTab::Sources)),
             ]
             .into(),
-            SettingsTab::Sources => scrollable(
-                column(
-                    self.sources
-                        .iter()
-                        .map(|source| source.view())
-                        .collect::<Vec<_>>(),
-                )
-            ).into(),
+            SettingsTab::Sources => scrollable(column(
+                self.sources
+                    .iter()
+                    .map(|source| source.view())
+                    .collect::<Vec<_>>(),
+            ))
+            .into(),
             SettingsTab::GeneralSettings => text("General settings").into(),
         }
     }
@@ -289,11 +307,8 @@ pub fn main() -> iced::Result {
         .run()
 }
 
-pub trait RenderIce {
+trait RenderIce {
     fn view<'a>(&'a self) -> Element<'a, Message>;
-    fn view_inside<'a>(&'a self) -> Element<'a, Message> {
-        self.view()
-    }
 }
 
 impl RenderIce for SourceWithConfig {
@@ -325,47 +340,5 @@ impl RenderIce for Book {
             .height(Length::Fixed(110.0));
 
         row![cover, info].spacing(12).into()
-    }
-
-    fn view_inside<'a>(&'a self) -> Element<'a, Message> {
-        let mut details = column![
-            text(&self.title).size(24),
-            text(format!("By {}", self.author)).size(16),
-            text(format!(
-                "Status: {} | Chapters: {}",
-                self.status, self.chapters_count
-            ))
-            .size(14),
-            text(format!("Rating: ⭐ {:.1}", self.rating)).size(14),
-        ]
-        .spacing(8);
-
-        if !self.genres.is_empty() {
-            let mut genre_row = row![].spacing(6);
-            for genre in &self.genres {
-                genre_row = genre_row.push(container(text(genre).size(12)).padding([2, 6]));
-            }
-            details = details.push(genre_row);
-        }
-
-        let lib_status = if self.in_library { "In Library" } else { "Not in Library" };
-        details = details.push(text(lib_status).size(12));
-
-        let summary_box = column![
-            text("Summary").size(18),
-            text(&self.summary).size(14),
-        ]
-        .spacing(6);
-
-        let cover = container(text("📖 Large Cover")).width(Length::Fixed(120.0));
-        let top_content = row![cover, details].spacing(20);
-
-        container(scrollable(
-            column![top_content, summary_box]
-                .spacing(20)
-                .width(Length::Fill),
-        ))
-        .padding(20)
-        .into()
     }
 }

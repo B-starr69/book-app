@@ -12,7 +12,7 @@ use url::Url;
 pub async fn import_from_github(
     repo_url: &str,
     base_dir: &Path, // FIX: Added base_dir to prevent hardcoded relative path issues
-    db: &Database
+    db: &Database,
 ) -> Result<Vec<String>> {
     // 1. Parse GitHub Repository URL
     let url = Url::parse(repo_url).map_err(|e| anyhow!("Invalid repository URL: {}", e))?;
@@ -23,7 +23,9 @@ pub async fn import_from_github(
         .collect();
 
     if segments.len() < 2 {
-        return Err(anyhow!("Repository URL must contain both an owner and a repo name"));
+        return Err(anyhow!(
+            "Repository URL must contain both an owner and a repo name"
+        ));
     }
 
     let owner = segments[0];
@@ -45,9 +47,12 @@ pub async fn import_from_github(
     };
 
     // FIX: Propagate database errors instead of silently ignoring them
-    db.save_repository(&repository)?;
+    db.save_repository(&repository).await?;
 
-    let api_url = format!("https://api.github.com/repos/{}/{}/contents/sources", owner, repo);
+    let api_url = format!(
+        "https://api.github.com/repos/{}/{}/contents/sources",
+        owner, repo
+    );
 
     // 2. Fetch the directory index list
     let resp = client
@@ -58,7 +63,10 @@ pub async fn import_from_github(
         .await?;
 
     if !resp.status().is_success() {
-        return Err(anyhow!("GitHub Directory API request returned status: {}", resp.status()));
+        return Err(anyhow!(
+            "GitHub Directory API request returned status: {}",
+            resp.status()
+        ));
     }
 
     let items: serde_json::Value = resp.json().await?;
@@ -89,7 +97,11 @@ pub async fn import_from_github(
             .await?;
 
         if !dir_resp.status().is_success() {
-            eprintln!("Skipping 'sources/{}': Content query failed with status {}", dir_name, dir_resp.status());
+            eprintln!(
+                "Skipping 'sources/{}': Content query failed with status {}",
+                dir_name,
+                dir_resp.status()
+            );
             continue;
         }
 
@@ -101,8 +113,12 @@ pub async fn import_from_github(
         // 4. Scan files inside the directory
         if let Some(files_arr) = files.as_array() {
             for f in files_arr {
-                let Some(fname) = f.get("name").and_then(|n| n.as_str()) else { continue };
-                let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) else { continue };
+                let Some(fname) = f.get("name").and_then(|n| n.as_str()) else {
+                    continue;
+                };
+                let Some(download_url) = f.get("download_url").and_then(|d| d.as_str()) else {
+                    continue;
+                };
 
                 match fname {
                     "metadata.json" => {
@@ -120,7 +136,10 @@ pub async fn import_from_github(
         }
 
         if metadata_txt.is_empty() {
-            eprintln!("Skipping 'sources/{}': Required 'metadata.json' file is missing", dir_name);
+            eprintln!(
+                "Skipping 'sources/{}': Required 'metadata.json' file is missing",
+                dir_name
+            );
             continue;
         }
 
@@ -144,13 +163,19 @@ pub async fn import_from_github(
         // FIX: Uses the passed base_dir instead of hardcoded "sources"
         let local_directory_base = base_dir.join("sources").join(&src.source.id);
         if let Err(e) = fs::create_dir_all(&local_directory_base) {
-            eprintln!("Failed to generate local directory structure target {:?}: {}", local_directory_base, e);
+            eprintln!(
+                "Failed to generate local directory structure target {:?}: {}",
+                local_directory_base, e
+            );
             continue;
         }
 
         if let Some(js_payload) = index_js_txt {
             if let Err(e) = fs::write(local_directory_base.join("index.js"), js_payload) {
-                eprintln!("Failed to write index.js configuration script to disk: {}", e);
+                eprintln!(
+                    "Failed to write index.js configuration script to disk: {}",
+                    e
+                );
             } else {
                 src.config.script_path = Some(format!("sources/{}/index.js", src.source.id));
             }
@@ -171,8 +196,11 @@ pub async fn import_from_github(
         }
 
         // 7. Store the verified data asset
-        if let Err(db_err) = db.save_source_with_repo(&src, Some(&repo_id)) {
-            eprintln!("Database transaction rejected source entry '{}': {:?}", src.source.id, db_err);
+        if let Err(db_err) = db.save_source_with_repo(&src, Some(&repo_id)).await {
+            eprintln!(
+                "Database transaction rejected source entry '{}': {:?}",
+                src.source.id, db_err
+            );
             continue;
         }
 
@@ -180,10 +208,9 @@ pub async fn import_from_github(
     }
 
     // Update the repository's last checked timestamp upon completion
-    if let Some(mut updated_repo) = db.get_repository(&repo_id)? {
+    if let Some(mut updated_repo) = db.get_repository(&repo_id).await? {
         updated_repo.last_checked_timestamp = Utc::now().timestamp();
-        // FIX: Propagate error
-        db.save_repository(&updated_repo)?;
+        db.save_repository(&updated_repo).await?;
     }
 
     Ok(imported_source_ids)
@@ -202,7 +229,9 @@ pub async fn check_for_updates(
         .collect();
 
     if segments.len() < 2 {
-        return Err(anyhow!("Repository URL must contain both an owner and a repo name"));
+        return Err(anyhow!(
+            "Repository URL must contain both an owner and a repo name"
+        ));
     }
 
     let owner = segments[0];
@@ -213,7 +242,10 @@ pub async fn check_for_updates(
 
     let repo_id = format!("{}_{}", owner, repo);
     let client = reqwest::Client::new();
-    let commits_url = format!("https://api.github.com/repos/{}/{}/commits?per_page=1", owner, repo);
+    let commits_url = format!(
+        "https://api.github.com/repos/{}/{}/commits?per_page=1",
+        owner, repo
+    );
 
     let resp = client
         .get(&commits_url)
@@ -227,13 +259,15 @@ pub async fn check_for_updates(
     }
 
     let commits: serde_json::Value = resp.json().await?;
-    let latest_commit = commits.as_array()
+    let latest_commit = commits
+        .as_array()
         .and_then(|arr| arr.first())
         .and_then(|c| c.get("sha"))
         .and_then(|s| s.as_str())
         .map(|s| s.to_string());
 
-    let commit_message = commits.as_array()
+    let commit_message = commits
+        .as_array()
         .and_then(|arr| arr.first())
         .and_then(|c| c.get("commit"))
         .and_then(|c| c.get("message"))
@@ -242,7 +276,7 @@ pub async fn check_for_updates(
 
     let mut results = Vec::new();
 
-    if let Some(mut stored_repo) = db.get_repository(&repo_id)? {
+    if let Some(mut stored_repo) = db.get_repository(&repo_id).await? {
         let has_update = match (&stored_repo.last_synced_commit, &latest_commit) {
             (Some(stored), Some(latest)) => stored != latest,
             (None, Some(_)) => true,
@@ -250,8 +284,7 @@ pub async fn check_for_updates(
         };
 
         stored_repo.last_checked_timestamp = Utc::now().timestamp();
-        // FIX: Propagate error
-        db.save_repository(&stored_repo)?;
+        db.save_repository(&stored_repo).await?;
 
         results.push((repo_id, has_update, latest_commit, commit_message));
     } else {
