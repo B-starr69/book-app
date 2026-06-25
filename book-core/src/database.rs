@@ -1,5 +1,6 @@
 use crate::models::{
-    Book, BookFormat, Chapter, Repository, Source, SourceConfig, SourceWithConfig,WebNovel,Novel,BaseBook
+    BaseBook, Book, BookFormat, Chapter, Novel, Repository, Source, SourceConfig, SourceType,
+    SourceWithConfig, WebNovel,
 };
 use crate::platform;
 use crate::storage;
@@ -16,9 +17,14 @@ pub struct TursoConfig {
 }
 
 pub enum DatabaseMode {
-    Local { path: String },
+    Local {
+        path: String,
+    },
     Remote(TursoConfig),
-    RemoteReplica { local_path: String, remote: TursoConfig },
+    RemoteReplica {
+        local_path: String,
+        remote: TursoConfig,
+    },
 }
 
 // =========================================================================
@@ -35,15 +41,22 @@ impl Database {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        Self::new(DatabaseMode::Local { path: path.to_string_lossy().into_owned() }).await
+        Self::new(DatabaseMode::Local {
+            path: path.to_string_lossy().into_owned(),
+        })
+        .await
     }
 
     pub async fn new(mode: DatabaseMode) -> Result<Self, libsql::Error> {
         let db = match mode {
             DatabaseMode::Local { path } => Builder::new_local(path).build().await?,
-            DatabaseMode::Remote(cfg) => Builder::new_remote(cfg.url, cfg.auth_token).build().await?,
+            DatabaseMode::Remote(cfg) => {
+                Builder::new_remote(cfg.url, cfg.auth_token).build().await?
+            }
             DatabaseMode::RemoteReplica { local_path, remote } => {
-                Builder::new_remote_replica(local_path, remote.url, remote.auth_token).build().await?
+                Builder::new_remote_replica(local_path, remote.url, remote.auth_token)
+                    .build()
+                    .await?
             }
         };
 
@@ -60,34 +73,41 @@ impl Database {
     // Schema
     // ------------------------------------------------------------------
     async fn init_schema(&self) -> Result<(), libsql::Error> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS repositories (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS repositories (
                 id TEXT PRIMARY KEY, url TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
                 last_synced_commit TEXT, last_checked_timestamp INTEGER NOT NULL);",
-        ).await?;
+            )
+            .await?;
 
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sources (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS sources (
                 id TEXT PRIMARY KEY, repo_id TEXT, url TEXT NOT NULL, icon_url TEXT,
                 cover_url_pattern TEXT, name TEXT NOT NULL, description TEXT, config TEXT,
                 default_format TEXT NOT NULL DEFAULT 'web_novel',
                 FOREIGN KEY (repo_id) REFERENCES repositories (id) ON DELETE SET NULL);",
-        ).await?;
+            )
+            .await?;
 
         // FIX: Removed `genres TEXT` column to enforce proper normalization
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS books (
-                id TEXT, source_id TEXT NOT NULL, format TEXT NOT NULL DEFAULT 'web_novel',
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS books (
+                id TEXT, source_id TEXT NOT NULL,
                 in_library BOOLEAN NOT NULL DEFAULT 0, title TEXT, author TEXT, cover_url TEXT,
                 rating REAL, status TEXT, summary TEXT, last_synced INTEGER,
                 last_read_timestamp INTEGER DEFAULT 0,
                 PRIMARY KEY (source_id, id),
                 FOREIGN KEY (source_id) REFERENCES sources (id) ON DELETE CASCADE);",
-        ).await?;
+            )
+            .await?;
 
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS novels (
-                book_id TEXT NOT NULL, source_id TEXT NOT NULL, file_path TEXT NOT NULL,
+                book_id TEXT NOT NULL, source_id TEXT NOT NULL, format TEXT NOT NULL,
+                file_path TEXT,
                 progress REAL NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (source_id, book_id),
                 FOREIGN KEY (source_id, book_id) REFERENCES books (source_id, id) ON DELETE CASCADE);",
@@ -110,24 +130,30 @@ impl Database {
         ).await?;
 
         // FIX: Restored proper normalized tables for Genres
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS genres (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS genres (
                 id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);",
-        ).await?;
+            )
+            .await?;
 
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS book_genres (
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS book_genres (
                 book_id TEXT NOT NULL, source_id TEXT NOT NULL, genre_id TEXT NOT NULL,
                 PRIMARY KEY (source_id, book_id, genre_id),
                 FOREIGN KEY (source_id, book_id) REFERENCES books (source_id, id) ON DELETE CASCADE,
                 FOREIGN KEY (genre_id) REFERENCES genres (id) ON DELETE CASCADE);",
-        ).await?;
+            )
+            .await?;
 
-        self.conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_books_library ON books(in_library);
-             CREATE INDEX IF NOT EXISTS idx_books_format ON books(format);
+        self.conn
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_books_library ON books(in_library);
+             CREATE INDEX IF NOT EXISTS idx_novels_format ON novels(format);
              CREATE INDEX IF NOT EXISTS idx_sources_repo ON sources(repo_id);",
-        ).await?;
+            )
+            .await?;
 
         Ok(())
     }
@@ -161,8 +187,11 @@ impl Database {
 
         if let Some(row) = rows.next().await? {
             return Ok(Some(Repository {
-                id: row.get(0)?, url: row.get(1)?, display_name: row.get(2)?,
-                last_synced_commit: row.get(3)?, last_checked_timestamp: row.get(4)?,
+                id: row.get(0)?,
+                url: row.get(1)?,
+                display_name: row.get(2)?,
+                last_synced_commit: row.get(3)?,
+                last_checked_timestamp: row.get(4)?,
             }));
         }
         Ok(None)
@@ -173,69 +202,82 @@ impl Database {
     // ------------------------------------------------------------------
     fn parse_book_format(s: &str) -> BookFormat {
         match s {
-            "epub" => BookFormat::Epub, "mobi" => BookFormat::Mobi, "pdf" => BookFormat::Pdf,
-            _ => BookFormat::WebNovel,
+            "mobi" => BookFormat::Mobi,
+            "pdf" => BookFormat::Pdf,
+            _ => BookFormat::Epub,
         }
     }
 
     fn book_format_str(f: &BookFormat) -> &'static str {
         match f {
-            BookFormat::WebNovel => "web_novel", BookFormat::Epub => "epub",
-            BookFormat::Mobi => "mobi", BookFormat::Pdf => "pdf",
+            BookFormat::Epub => "epub",
+            BookFormat::Mobi => "mobi",
+            BookFormat::Pdf => "pdf",
+        }
+    }
+
+    fn source_format(f: &SourceType) -> &'static str {
+        match f {
+            SourceType::WebNovel => "web_novel",
+            SourceType::Novel => "novel",
         }
     }
 
     /// Build a Book from a libsql Row.
-    /// Column order: 0:id, 1:source_id, 2:format, 3:in_library, 4:title, 5:author,
-    /// 6:cover_url, 7:rating, 8:status, 9:chapters_count, 10:summary, 11:last_synced,
-    /// 12:last_read_timestamp, 13:file_path, 14:progress
+    /// Column order: 0:id, 1:source_id, 2:in_library, 3:title, 4:author,
+    /// 5:cover_url, 6:rating, 7:status, 8:chapters_count, 9:summary, 10:last_synced,
+    /// 11:last_read_timestamp, 12:chapters_path, 13:format, 14:file_path, 15:progress
 
-fn row_to_book(row: &libsql::Row) -> Result<Book, libsql::Error> {
-        let format_str: String = row.get(2)?;
-        let format = Self::parse_book_format(&format_str);
-
+    fn row_to_book(row: &libsql::Row) -> Result<Book, libsql::Error> {
         let base = BaseBook {
             id: row.get(0)?,
             source_id: row.get(1)?,
-            format,
-            in_library: row.get(3)?,
-            title: row.get::<Option<String>>(4)?.unwrap_or_default(),
-            author: row.get::<Option<String>>(5)?.unwrap_or_default(),
-            cover_url: row.get::<Option<String>>(6)?.unwrap_or_default(),
-            rating: row.get::<Option<f64>>(7)?.unwrap_or(0.0) as f32,
-            status: row.get::<Option<String>>(8)?.unwrap_or_default(),
+            in_library: row.get(2)?,
+            title: row.get::<Option<String>>(3)?.unwrap_or_default(),
+            author: row.get::<Option<String>>(4)?.unwrap_or_default(),
+            cover_url: row.get::<Option<String>>(5)?.unwrap_or_default(),
+            rating: row.get::<Option<f64>>(6)?.unwrap_or(0.0) as f32,
+            status: row.get::<Option<String>>(7)?.unwrap_or_default(),
             genres: Vec::new(), // Populated out-of-band by query wrappers
-            summary: row.get::<Option<String>>(10)?.unwrap_or_default(),
-            last_synced: row.get::<Option<i64>>(11)?.unwrap_or(0),
-            last_read_timestamp: row.get::<Option<i64>>(12)?.unwrap_or(0),
+            summary: row.get::<Option<String>>(9)?.unwrap_or_default(),
+            last_synced: row.get::<Option<i64>>(10)?,
+            last_read_timestamp: row.get::<Option<i64>>(11)?.unwrap_or(0),
         };
 
-        match format {
-            BookFormat::WebNovel => {
-                Ok(Book::WebNovel(WebNovel {
-                    base,
-                    chapters_count: row.get::<Option<i64>>(9)?.unwrap_or(0) as i32,
-                    // Reconstruct path or leave to be enriched by chapter-fetching joins
-                    chapters_path: row.get::<Option<String>>(13).unwrap_or_default().unwrap_or_default(),
-                    chapters: Vec::new(),
-                }))
-            }
-            _ => {
-                Ok(Book::Novel(Novel {
-                    base,
-                    file_path: row.get::<Option<String>>(13)?.unwrap_or_default(),
-                    progress: row.get::<Option<f64>>(14)?.unwrap_or(0.0) as f32,
-                }))
-            }
+        if let Some(format_str) = row.get::<Option<String>>(13)? {
+            let format = Self::parse_book_format(&format_str);
+            Ok(Book::Novel(Novel {
+                base,
+                format,
+                file_path: row.get::<Option<String>>(14)?,
+                progress: row.get::<Option<f64>>(15)?.unwrap_or(0.0) as f32,
+            }))
+        } else {
+            Ok(Book::WebNovel(WebNovel {
+                base,
+                chapters_count: row.get::<Option<i64>>(8)?.unwrap_or(0) as i32,
+                chapters_path: row
+                    .get::<Option<String>>(12)
+                    .unwrap_or_default()
+                    .unwrap_or_default(),
+                chapters: Vec::new(),
+            }))
         }
     }
 
-    async fn fetch_genres_for_book(&self, book_id: &str, source_id: &str) -> Result<Vec<String>, libsql::Error> {
-        let mut rows = self.conn.query(
-            "SELECT g.name FROM genres g JOIN book_genres bg ON g.id = bg.genre_id
+    async fn fetch_genres_for_book(
+        &self,
+        book_id: &str,
+        source_id: &str,
+    ) -> Result<Vec<String>, libsql::Error> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT g.name FROM genres g JOIN book_genres bg ON g.id = bg.genre_id
              WHERE bg.source_id = ?1 AND bg.book_id = ?2",
-            params![source_id.to_string(), book_id.to_string()],
-        ).await?;
+                params![source_id.to_string(), book_id.to_string()],
+            )
+            .await?;
 
         let mut genres = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -244,12 +286,19 @@ fn row_to_book(row: &libsql::Row) -> Result<Book, libsql::Error> {
         Ok(genres)
     }
 
-    async fn fetch_chapters_for_book(&self, book_id: &str, source_id: &str) -> Result<Vec<Chapter>, libsql::Error> {
-        let mut rows = self.conn.query(
-            "SELECT id, title, file_path, date, progress, last_read FROM chapters
+    async fn fetch_chapters_for_book(
+        &self,
+        book_id: &str,
+        source_id: &str,
+    ) -> Result<Vec<Chapter>, libsql::Error> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, title, file_path, date, progress, last_read FROM chapters
              WHERE source_id = ?1 AND book_id = ?2 ORDER BY date ASC, id ASC",
-            params![source_id.to_string(), book_id.to_string()],
-        ).await?;
+                params![source_id.to_string(), book_id.to_string()],
+            )
+            .await?;
 
         let mut chapters = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -267,10 +316,10 @@ fn row_to_book(row: &libsql::Row) -> Result<Book, libsql::Error> {
 
     fn books_select_sql(where_clause: &str) -> String {
         format!(
-            "SELECT b.id, b.source_id, b.format, b.in_library, b.title, b.author,
+            "SELECT b.id, b.source_id, b.in_library, b.title, b.author,
                     b.cover_url, b.rating, b.status, COALESCE(w.chapters_count, 0) AS chapters_count,
                     b.summary, b.last_synced, b.last_read_timestamp,
-                    n.file_path, COALESCE(n.progress, 0.0) AS progress
+                    w.chapters_path, n.format, n.file_path, COALESCE(n.progress, 0.0) AS progress
              FROM books b
              LEFT JOIN novels n ON n.source_id = b.source_id AND n.book_id = b.id
              LEFT JOIN webnovels w ON w.source_id = b.source_id AND w.book_id = b.id
@@ -282,28 +331,25 @@ fn row_to_book(row: &libsql::Row) -> Result<Book, libsql::Error> {
     // Books — public API
     // ------------------------------------------------------------------
 
-pub async fn save_book(&self, book: &Book) -> Result<(), libsql::Error> {
+    pub async fn save_book(&self, book: &Book) -> Result<(), libsql::Error> {
         self.conn.execute_batch("BEGIN IMMEDIATE;").await?;
 
         let result = async {
             let base = book.base();
-            let format_str = Self::book_format_str(&base.format);
-            let timestamp = Utc::now().timestamp();
-
-            // 1. Core Book Upsert
-            let chapters_count_fallback = match book {
-                Book::WebNovel(wn) => wn.chapters_count as i64,
-                Book::Novel(_) => 0,
+            let last_synced = if base.source_id == "local" {
+                None
+            } else {
+                Some(base.last_synced.unwrap_or_else(|| Utc::now().timestamp()))
             };
 
+            // 1. Core Book Upsert
             self.conn.execute(
-                "INSERT OR REPLACE INTO books (id, source_id, format, in_library, title, author,
+                "INSERT OR REPLACE INTO books (id, source_id, in_library, title, author,
                     cover_url, rating, status, summary, last_synced, last_read_timestamp)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     base.id.clone(),
                     base.source_id.clone(),
-                    format_str.to_string(),
                     base.in_library,
                     base.title.clone(),
                     base.author.clone(),
@@ -311,7 +357,7 @@ pub async fn save_book(&self, book: &Book) -> Result<(), libsql::Error> {
                     base.rating as f64,
                     base.status.clone(),
                     base.summary.clone(),
-                    timestamp,
+                    last_synced,
                     base.last_read_timestamp
                 ],
             ).await?;
@@ -319,11 +365,13 @@ pub async fn save_book(&self, book: &Book) -> Result<(), libsql::Error> {
             // 2. Clear variant branching via match pattern matching
             match book {
                 Book::Novel(novel) => {
+                    let format_str = Self::book_format_str(&novel.format);
                     self.conn.execute(
-                        "INSERT OR REPLACE INTO novels (book_id, source_id, file_path, progress) VALUES (?1, ?2, ?3, ?4)",
+                        "INSERT OR REPLACE INTO novels (book_id, source_id, format, file_path, progress) VALUES (?1, ?2, ?3, ?4, ?5)",
                         params![
                             novel.base.id.clone(),
                             novel.base.source_id.clone(),
+                            format_str.to_string(),
                             novel.file_path.clone(),
                             novel.progress as f64
                         ],
@@ -389,12 +437,14 @@ pub async fn save_book(&self, book: &Book) -> Result<(), libsql::Error> {
         result
     }
 
-
-pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, libsql::Error> {
-        let mut rows = self.conn.query(
-            &Self::books_select_sql("WHERE b.id = ?1 AND b.source_id = ?2"),
-            params![id.to_string(), source_id.to_string()],
-        ).await?;
+    pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, libsql::Error> {
+        let mut rows = self
+            .conn
+            .query(
+                &Self::books_select_sql("WHERE b.id = ?1 AND b.source_id = ?2"),
+                params![id.to_string(), source_id.to_string()],
+            )
+            .await?;
 
         if let Some(row) = rows.next().await? {
             // 1. Reconstruct the base variant from row data
@@ -420,7 +470,10 @@ pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, 
         Ok(None)
     }
     pub async fn get_library_books(&self) -> Result<Vec<Book>, libsql::Error> {
-        self.query_books(&Self::books_select_sql("WHERE b.in_library = 1 ORDER BY b.last_read_timestamp DESC")).await
+        self.query_books(&Self::books_select_sql(
+            "WHERE b.in_library = 1 ORDER BY b.last_read_timestamp DESC",
+        ))
+        .await
     }
 
     pub async fn get_all_books(&self) -> Result<Vec<Book>, libsql::Error> {
@@ -441,37 +494,57 @@ pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, 
 
     /// Highly optimized batch fetcher using a single temporary table to avoid N+1 queries
     async fn populate_book_relations(&self, books: &mut [Book]) -> Result<(), libsql::Error> {
-        if books.is_empty() { return Ok(()); }
-        
+        if books.is_empty() {
+            return Ok(());
+        }
+
         let mut webnovel_keys = Vec::new();
         let mut all_keys = Vec::new();
 
         for book in books.iter() {
-            let key = (book.source_id.clone(), book.id.clone());
+            let key = (book.source_id().clone(), book.id().clone());
             all_keys.push(key.clone());
-            if book.format == BookFormat::WebNovel {
+            if book.is_webnovel() {
                 webnovel_keys.push(key);
             }
         }
 
-        self.conn.execute_batch("CREATE TEMP TABLE IF NOT EXISTS temp_book_keys (source_id TEXT, book_id TEXT);").await?;
-        self.conn.execute_batch("DELETE FROM temp_book_keys;").await?;
+        self.conn
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS temp_book_keys (source_id TEXT, book_id TEXT);",
+            )
+            .await?;
+        self.conn
+            .execute_batch("DELETE FROM temp_book_keys;")
+            .await?;
 
         for (source_id, book_id) in &all_keys {
-            self.conn.execute("INSERT INTO temp_book_keys (source_id, book_id) VALUES (?1, ?2)", params![source_id.clone(), book_id.clone()]).await?;
+            self.conn
+                .execute(
+                    "INSERT INTO temp_book_keys (source_id, book_id) VALUES (?1, ?2)",
+                    params![source_id.clone(), book_id.clone()],
+                )
+                .await?;
         }
 
         // 1. Fetch all Genres
-        let mut genre_rows = self.conn.query(
-            "SELECT bg.source_id, bg.book_id, g.name FROM book_genres bg
+        let mut genre_rows = self
+            .conn
+            .query(
+                "SELECT bg.source_id, bg.book_id, g.name FROM book_genres bg
              JOIN genres g ON bg.genre_id = g.id
-             JOIN temp_book_keys t ON bg.source_id = t.source_id AND bg.book_id = t.book_id", ()
-        ).await?;
+             JOIN temp_book_keys t ON bg.source_id = t.source_id AND bg.book_id = t.book_id",
+                (),
+            )
+            .await?;
 
         let mut genres_map: HashMap<(String, String), Vec<String>> = HashMap::new();
         while let Some(row) = genre_rows.next().await? {
             let key = (row.get::<String>(0)?, row.get::<String>(1)?);
-            genres_map.entry(key).or_default().push(row.get::<String>(2)?);
+            genres_map
+                .entry(key)
+                .or_default()
+                .push(row.get::<String>(2)?);
         }
 
         // 2. Fetch all Chapters (if any webnovels exist)
@@ -496,59 +569,107 @@ pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, 
             }
         }
 
-        self.conn.execute_batch("DROP TABLE IF EXISTS temp_book_keys;").await?;
+        self.conn
+            .execute_batch("DROP TABLE IF EXISTS temp_book_keys;")
+            .await?;
 
         // 3. Apply relations back to the Book structs
         for book in books.iter_mut() {
-            let key = (book.source_id.clone(), book.id.clone());
-            if let Some(genres) = genres_map.remove(&key) { book.genres = genres; }
-            if book.format == BookFormat::WebNovel {
-                if let Some(chapters) = chapters_map.remove(&key) { book.chapters = chapters; }
+            let key = (book.source_id().to_string(), book.id().to_string());
+            if let Some(genres) = genres_map.remove(&key) {
+                book.base_mut().genres = genres;
+            }
+            match book {
+                Book::WebNovel(book) => {
+                    if let Some(chapters) = chapters_map.remove(&key) {
+                        book.chapters = chapters;
+                    }
+                }
+                _ => {}
             }
         }
 
         Ok(())
     }
-
-    pub async fn set_in_library(&self, book_id: &str, source_id: &str, in_library: bool) -> Result<(), libsql::Error> {
-        self.conn.execute("UPDATE books SET in_library = ?1 WHERE id = ?2 AND source_id = ?3",
-            params![in_library, book_id.to_string(), source_id.to_string()]).await?;
+    pub async fn set_in_library(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        in_library: bool,
+    ) -> Result<(), libsql::Error> {
+        self.conn
+            .execute(
+                "UPDATE books SET in_library = ?1 WHERE id = ?2 AND source_id = ?3",
+                params![in_library, book_id.to_string(), source_id.to_string()],
+            )
+            .await?;
         Ok(())
     }
 
     pub async fn delete_book(&self, id: &str, source_id: &str) -> Result<u64, libsql::Error> {
-        self.conn.execute("DELETE FROM books WHERE id = ?1 AND source_id = ?2",
-            params![id.to_string(), source_id.to_string()]).await
+        self.conn
+            .execute(
+                "DELETE FROM books WHERE id = ?1 AND source_id = ?2",
+                params![id.to_string(), source_id.to_string()],
+            )
+            .await
     }
 
     // --- Progress Tracking ---
-    pub async fn update_chapter_progress(&self, book_id: &str, source_id: &str, chapter_id: &str, progress: f32) -> Result<(), libsql::Error> {
+    pub async fn update_chapter_progress(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        chapter_id: &str,
+        progress: f32,
+    ) -> Result<(), libsql::Error> {
         let timestamp = Utc::now().timestamp();
         self.conn.execute("UPDATE chapters SET progress = ?1, last_read = ?2 WHERE source_id = ?3 AND book_id = ?4 AND id = ?5",
             params![progress as f64, timestamp, source_id, book_id, chapter_id]).await?;
 
         // FIX: Update book timestamp unconditionally on any progress
-        self.conn.execute("UPDATE books SET last_read_timestamp = ?1 WHERE id = ?2 AND source_id = ?3",
-            params![timestamp, book_id, source_id]).await?;
+        self.conn
+            .execute(
+                "UPDATE books SET last_read_timestamp = ?1 WHERE id = ?2 AND source_id = ?3",
+                params![timestamp, book_id, source_id],
+            )
+            .await?;
         Ok(())
     }
 
-    pub async fn update_book_progress(&self, book_id: &str, source_id: &str, progress: f32) -> Result<(), libsql::Error> {
+    pub async fn update_book_progress(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        progress: f32,
+    ) -> Result<(), libsql::Error> {
         let timestamp = Utc::now().timestamp();
-        self.conn.execute("UPDATE novels SET progress = ?1 WHERE book_id = ?2 AND source_id = ?3",
-            params![progress as f64, book_id, source_id]).await?;
-        self.conn.execute("UPDATE books SET last_read_timestamp = ?1 WHERE id = ?2 AND source_id = ?3",
-            params![timestamp, book_id, source_id]).await?;
+        self.conn
+            .execute(
+                "UPDATE novels SET progress = ?1 WHERE book_id = ?2 AND source_id = ?3",
+                params![progress as f64, book_id, source_id],
+            )
+            .await?;
+        self.conn
+            .execute(
+                "UPDATE books SET last_read_timestamp = ?1 WHERE id = ?2 AND source_id = ?3",
+                params![timestamp, book_id, source_id],
+            )
+            .await?;
         Ok(())
     }
 
     // ------------------------------------------------------------------
     // Sources
     // ------------------------------------------------------------------
-    pub async fn save_source_with_repo(&self, source: &SourceWithConfig, repo_id: Option<&str>) -> Result<(), libsql::Error> {
+    pub async fn save_source_with_repo(
+        &self,
+        source: &SourceWithConfig,
+        repo_id: Option<&str>,
+    ) -> Result<(), libsql::Error> {
         let source = source.clone();
         let config_json = serde_json::to_string(&source.config).unwrap_or_default();
-        let default_format = Self::book_format_str(&source.config.default_format);
+        let default_format = Self::source_format(&source.config.default_format);
 
         self.conn.execute(
             "INSERT OR REPLACE INTO sources (id, repo_id, url, cover_url_pattern, name, icon_url, description, config, default_format)
@@ -567,8 +688,12 @@ pub async fn get_book(&self, id: &str, source_id: &str) -> Result<Option<Book>, 
             let config_json: String = row.get::<Option<String>>(6)?.unwrap_or_default();
             sources.push(SourceWithConfig {
                 source: Source {
-                    id: row.get(0)?, url: row.get(1)?, cover_url_pattern: row.get(2)?,
-                    name: row.get(3)?, icon_url: row.get(4)?, description: row.get(5)?,
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    cover_url_pattern: row.get(2)?,
+                    name: row.get(3)?,
+                    icon_url: row.get(4)?,
+                    description: row.get(5)?,
                 },
                 config: serde_json::from_str(&config_json).unwrap_or_default(),
             });
@@ -584,6 +709,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_database_schema() {
-        let database = Database::new(DatabaseMode::Local { path: "/Library.db".to_string()  }).await;
+        let database = Database::new(DatabaseMode::Local {
+            path: "Library.db".to_string(),
+        })
+        .await;
     }
 }

@@ -4,7 +4,7 @@
 //! There is no remote `download_url` — import always means a local file.
 
 use crate::database::Database;
-use crate::models::{Book, BookFormat, Chapter};
+use crate::models::{BaseBook, Book, BookFormat, Chapter, Novel};
 use crate::platform;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -35,7 +35,6 @@ fn destination_path(format: &BookFormat, id: &str) -> PathBuf {
         BookFormat::Epub => "epub",
         BookFormat::Mobi => "mobi",
         BookFormat::Pdf => "pdf",
-        BookFormat::WebNovel => "bin",
     };
     platform::get_books_dir().join(format!("{id}.{ext}"))
 }
@@ -155,7 +154,7 @@ fn extract_epub_metadata(path: &Path) -> Result<(String, String)> {
 }
 
 /// Copy a local file into app storage and register it in the database.
-pub async fn import_local_file(db: &Database, source_path: &Path) -> Result<Book> {
+ pub async fn import_local_file(db: &Database, source_path: &Path) -> Result<Book> {
     if !source_path.is_file() {
         return Err(anyhow!("Path is not a file: {}", source_path.display()));
     }
@@ -172,26 +171,27 @@ pub async fn import_local_file(db: &Database, source_path: &Path) -> Result<Book
             .unwrap_or_else(|_| (book_id_from_path(source_path), String::new())),
         _ => (book_id_from_path(source_path), String::new()),
     };
-
-    let book = Book {
+    let base: BaseBook = BaseBook {
         id,
         source_id: LOCAL_SOURCE_ID.to_string(),
-        format,
         title,
         author,
         cover_url: String::new(),
         status: String::new(),
         summary: String::new(),
         rating: 0.0,
-        chapters_count: 0,
         genres: Vec::new(),
-        in_library: true,
         last_read_timestamp: 0,
+        in_library: true,
+        last_synced: None,
+    };
+    let book = Novel {
+        base,
+        format,
         file_path: Some(dest.to_string_lossy().into_owned()),
         progress: 0.0,
-        chapters: Vec::new(),
     };
 
-    db.save_book(&book).await?;
-    Ok(book)
+    db.save_book(&Book::Novel(book.clone())).await?;
+    Ok(Book::Novel(book))
 }

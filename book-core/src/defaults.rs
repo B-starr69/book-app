@@ -22,54 +22,54 @@ pub fn novelfire_source() -> SourceWithConfig {
 
 fn novelfire_config() -> SourceConfig {
     SourceConfig {
-        script_path: Some("sources/novelfire/index.js".to_string()),
-        home: ActionConfig {
-            fetch: FetchMethod::Native {
-                target: NativeTarget::Static {
-                    url: "https://novelfire.net/home".to_string(),
-                },
-            },
-            parse: Strategy::Js(JsExecutionConfig {
-                js_function: Some("parseHome".to_string()),
-                script: None,
-            }),
-        },
-        details: ActionConfig {
-            fetch: FetchMethod::default(),
-            parse: Strategy::Js(JsExecutionConfig {
-                js_function: Some("parseBookDetails".to_string()),
-                script: None,
-            }),
-        },
-        chapter: ActionConfig {
-            fetch: FetchMethod::default(),
-            parse: Strategy::Js(JsExecutionConfig {
-                js_function: Some("parseChapterContent".to_string()),
-                script: None,
-            }),
-        },
-        search: Some(ActionConfig {
-            fetch: FetchMethod::Native {
-                target: NativeTarget::Dynamic {
-                    url_pattern:
-                        "https://novelfire.net/ajax/searchLive?keyword={keyword}&type=title"
-                            .to_string(),
-                    mode: DynamicMode::Single,
-                },
-            },
-            parse: Strategy::Js(JsExecutionConfig {
-                js_function: Some("parseSearch".to_string()),
-                script: None,
-            }),
-        }),
-        genres: vec![],
-        chapters_list: ActionConfig {
-            fetch: FetchMethod::default(),
-            parse: Strategy::Js(JsExecutionConfig {
-                js_function: Some("parseChapters".to_string()),
-                script: None,
-            }),
-        },
+        //     script_path: Some("sources/novelfire/index.js".to_string()),
+        //     home: ActionConfig {
+        //         fetch: FetchMethod::Native {
+        //             target: NativeTarget::Static {
+        //                 url: "https://novelfire.net/home".to_string(),
+        //             },
+        //         },
+        //         parse: Strategy::Js(JsExecutionConfig {
+        //             js_function: Some("parseHome".to_string()),
+        //             script: None,
+        //         }),
+        //     },
+        //     details: ActionConfig {
+        //         fetch: FetchMethod::default(),
+        //         parse: Strategy::Js(JsExecutionConfig {
+        //             js_function: Some("parseBookDetails".to_string()),
+        //             script: None,
+        //         }),
+        //     },
+        //     chapter: ActionConfig {
+        //         fetch: FetchMethod::default(),
+        //         parse: Strategy::Js(JsExecutionConfig {
+        //             js_function: Some("parseChapterContent".to_string()),
+        //             script: None,
+        //         }),
+        //     },
+        //     search: Some(ActionConfig {
+        //         fetch: FetchMethod::Native {
+        //             target: NativeTarget::Dynamic {
+        //                 url_pattern:
+        //                     "https://novelfire.net/ajax/searchLive?keyword={keyword}&type=title"
+        //                         .to_string(),
+        //                 mode: DynamicMode::Single,
+        //             },
+        //         },
+        //         parse: Strategy::Js(JsExecutionConfig {
+        //             js_function: Some("parseSearch".to_string()),
+        //             script: None,
+        //         }),
+        //     }),
+        //     genres: vec![],
+        //     chapters_list: ActionConfig {
+        //         fetch: FetchMethod::default(),
+        //         parse: Strategy::Js(JsExecutionConfig {
+        //             js_function: Some("parseChapters".to_string()),
+        //             script: None,
+        //         }),
+        //     },
         ..Default::default()
     }
 }

@@ -7,3 +7,5 @@ target
 /*.md
 !README.md
 .aider*
+*.db
+*_sources

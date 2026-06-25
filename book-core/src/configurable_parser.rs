@@ -45,9 +45,8 @@ impl ConfigurableParser {
     pub fn parse_home(&self, html: &str, _base_url: &str) -> Result<Vec<HomeSection>> {
         let rt = Runtime::new().unwrap();
         let ctx = Context::full(&rt).unwrap();
-
         ctx.with(|ctx| {
-            let script = self.config.home.js_script().unwrap_or("");
+            let script = self.config.clone().script_path.unwrap();
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -72,7 +71,7 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = self.config.chapters_list.js_script().unwrap_or("");
+            let script = self.config.clone().script_path.unwrap();
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -101,7 +100,7 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = self.config.details.js_script().unwrap_or("");
+            let script = self.config.clone().script_path.unwrap();
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -130,7 +129,7 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = self.config.chapter.js_script().unwrap_or("");
+            let script = self.config.clone().script_path.unwrap();
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -159,12 +158,7 @@ impl ConfigurableParser {
         let ctx = Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
-            let script = self
-                .config
-                .search
-                .as_ref()
-                .and_then(|search| search.js_script())
-                .unwrap_or("");
+            let script = self.config.clone().script_path.unwrap();
             ctx.eval::<(), _>(script.as_bytes())
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
