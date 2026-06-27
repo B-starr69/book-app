@@ -1,8 +1,9 @@
 use crate::configurable_fetcher::ConfigurableFetcher;
 use crate::configurable_parser::ConfigurableParser;
 use crate::models::{
-    ActionEngine, DynamicMode, FetchMethod, HomeSection, NativeTarget, ParsedBookDetails,
-    ParsedChapter, ParsedChapterInfo, SearchResult, SourceConfig, SourceWithConfig, Strategy,
+    ActionEngine, DynamicMode, FetchMethod, HomeSection, NativeTarget, ParseMethod,
+    ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult, SourceConfig,
+    SourceWithConfig,
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
 use std::path::PathBuf;
@@ -57,7 +58,7 @@ impl Fetcher {
 
     pub fn resolve_home_url(source: &SourceWithConfig) -> String {
         match &source.config.home.fetch {
-            FetchMethod::Native { target } => match target {
+            FetchMethod::Rust { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => url.clone(),
                 NativeTarget::Dynamic {
                     url_pattern,
@@ -74,7 +75,7 @@ impl Fetcher {
 
     pub fn resolve_details_url(source: &SourceWithConfig, book_id: &str) -> String {
         match &source.config.details.fetch {
-            FetchMethod::Native { target } => match target {
+            FetchMethod::Rust { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => url.clone(),
                 NativeTarget::Dynamic {
                     url_pattern,
@@ -90,7 +91,7 @@ impl Fetcher {
 
     pub fn resolve_chapters_list_url(source: &SourceWithConfig, book_id: &str) -> Option<String> {
         match &source.config.chapters_list.fetch {
-            FetchMethod::Native { target } => match target {
+            FetchMethod::Rust { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => Some(url.clone()),
                 NativeTarget::Dynamic {
                     url_pattern,
@@ -112,7 +113,7 @@ impl Fetcher {
         chapter_id: &str,
     ) -> String {
         match &source.config.chapter.fetch {
-            FetchMethod::Native { target } => match target {
+            FetchMethod::Rust { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => url.clone(),
                 NativeTarget::Dynamic {
                     url_pattern,
@@ -135,7 +136,7 @@ impl Fetcher {
         let search_config = source.config.search.as_ref()?;
 
         match &search_config.fetch {
-            FetchMethod::Native { target } => match target {
+            FetchMethod::Rust { target } => match target {
                 NativeTarget::Static { url } if !url.is_empty() => Some(url.clone()),
                 NativeTarget::Dynamic { url_pattern, .. } => {
                     let encoded_keyword = urlencoding::encode(keyword);
@@ -185,16 +186,13 @@ impl Fetcher {
         _nb_chap: i32,
     ) -> Result<Vec<ParsedChapterInfo>, String> {
         let html = match &source.config.chapters_list.fetch {
-            FetchMethod::Native { .. } => {
+            FetchMethod::Rust { .. } => {
                 let url = Self::resolve_chapters_list_url(source, book_id)
                     .unwrap_or_else(|| Self::resolve_details_url(source, book_id));
                 self.fetch_native_url(&url).await?
             }
-            FetchMethod::Js { .. } => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
+            FetchMethod::Js => {
+                let config = source.config.clone();
                 let fetcher = ConfigurableFetcher::new(config);
                 fetcher
                     .fetch_chapters_list(book_id)
@@ -206,12 +204,9 @@ impl Fetcher {
         };
 
         match &source.config.chapters_list.parse {
-            Strategy::Rust => Err(NATIVE_PARSE_MSG.to_string()),
-            Strategy::Js(_) => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
+            ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
+            ParseMethod::Js => {
+                let config = source.config.clone();
                 let parser = ConfigurableParser::new(config);
                 parser.parse_chapters_only(&html).map_err(|e| e.to_string())
             }
@@ -224,16 +219,12 @@ impl Fetcher {
         book_id: String,
     ) -> Result<ParsedBookDetails, String> {
         let html = match &source.config.details.fetch {
-            FetchMethod::Native { .. } => {
+            FetchMethod::Rust { .. } => {
                 let url = Self::resolve_details_url(source, &book_id);
                 self.fetch_native_url(&url).await?
             }
-            FetchMethod::Js { .. } => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let fetcher = ConfigurableFetcher::new(config);
+            FetchMethod::Js => {
+                let fetcher = ConfigurableFetcher::new(source.config.clone());
                 fetcher.fetch_details(&book_id).map_err(|e| e.to_string())?
             }
             FetchMethod::HeadlessBrowser => {
@@ -242,13 +233,9 @@ impl Fetcher {
         };
 
         match &source.config.details.parse {
-            Strategy::Rust => Err(NATIVE_PARSE_MSG.to_string()),
-            Strategy::Js(_) => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let parser = ConfigurableParser::new(config);
+            ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
+            ParseMethod::Js => {
+                let parser = ConfigurableParser::new(source.config.clone());
                 parser
                     .parse_book_details(&html, book_id)
                     .map_err(|e| e.to_string())
@@ -259,7 +246,7 @@ impl Fetcher {
     pub async fn get_home(&self, source: &SourceWithConfig) -> Result<Vec<HomeSection>, String> {
         // 1. Fetching Phase
         let html = match &source.config.home.fetch {
-            FetchMethod::Native { .. } => {
+            FetchMethod::Rust { .. } => {
                 let url = Self::resolve_home_url(source);
                 self.fetch_native_url(&url).await.map_err(|e| {
                     format!(
@@ -269,14 +256,7 @@ impl Fetcher {
                 })?
             }
             FetchMethod::Js { .. } => {
-                let config = self.prepare_js_config(source).await.ok_or_else(|| {
-                    format!(
-                        "Failed to prepare JS execution config for source '{}'",
-                        source.source.name
-                    )
-                })?;
-
-                let fetcher = ConfigurableFetcher::new(config);
+                let fetcher = ConfigurableFetcher::new(source.config.clone());
                 fetcher.fetch_home().map_err(|e| {
                     format!(
                         "JS fetch script execution failed for '{}': {e}",
@@ -294,19 +274,12 @@ impl Fetcher {
 
         // 2. Parsing Phase
         match &source.config.home.parse {
-            Strategy::Rust => Err(format!(
+            ParseMethod::Rust => Err(format!(
                 "Rust native parsing strategy is not implemented yet (triggered by '{}')",
                 source.source.name
             )),
-            Strategy::Js(_) => {
-                let config = self.prepare_js_config(source).await.ok_or_else(|| {
-                    format!(
-                        "Failed to prepare JS parsing config for source '{}'",
-                        source.source.name
-                    )
-                })?;
-
-                let parser = ConfigurableParser::new(config);
+            ParseMethod::Js => {
+                let parser = ConfigurableParser::new(source.config.clone());
                 parser.parse_home(&html, &source.source.url).map_err(|e| {
                     format!("JS parsing failed for source '{}': {e}", source.source.name)
                 })
@@ -320,16 +293,12 @@ impl Fetcher {
         chapter_id: String,
     ) -> Result<ParsedChapter, String> {
         let html = match &source.config.chapter.fetch {
-            FetchMethod::Native { .. } => {
+            FetchMethod::Rust { .. } => {
                 let url = Self::resolve_chapter_url(source, &book_id, &chapter_id);
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js { .. } => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let fetcher = ConfigurableFetcher::new(config);
+                let fetcher = ConfigurableFetcher::new(source.config.clone());
                 fetcher
                     .fetch_chapter_content(&book_id, &chapter_id)
                     .map_err(|e| e.to_string())?
@@ -340,13 +309,9 @@ impl Fetcher {
         };
 
         match &source.config.chapter.parse {
-            Strategy::Rust => Err(NATIVE_PARSE_MSG.to_string()),
-            Strategy::Js(_) => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let parser = ConfigurableParser::new(config);
+            ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
+            ParseMethod::Js => {
+                let parser = ConfigurableParser::new(source.config.clone());
                 parser
                     .parse_chapter_content(&html)
                     .map_err(|e| e.to_string())
@@ -367,17 +332,13 @@ impl Fetcher {
             .ok_or_else(|| "Search capability is not configured for this source".to_string())?;
 
         let html = match &search_config.fetch {
-            FetchMethod::Native { .. } => {
+            FetchMethod::Rust { .. } => {
                 let url = Self::resolve_search_url(source, keyword, genre)
                     .ok_or_else(|| "Failed to resolve search URL".to_string())?;
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js { .. } => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let fetcher = ConfigurableFetcher::new(config);
+                let fetcher = ConfigurableFetcher::new(source.config.clone());
                 fetcher
                     .fetch_search(keyword, genre)
                     .map_err(|e| e.to_string())?
@@ -388,65 +349,14 @@ impl Fetcher {
         };
 
         match &search_config.parse {
-            Strategy::Rust => Err(NATIVE_PARSE_MSG.to_string()),
-            Strategy::Js(_) => {
-                let config = self
-                    .prepare_js_config(source)
-                    .await
-                    .ok_or_else(|| "Failed to load extension script".to_string())?;
-                let parser = ConfigurableParser::new(config);
+            ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
+            ParseMethod::Js => {
+                let parser = ConfigurableParser::new(source.config.clone());
                 parser
                     .parse_search_results(&html)
                     .map_err(|e| e.to_string())
             }
         }
-    }
-
-    #[allow(dead_code)]
-    async fn js_parser(&self, source: &SourceWithConfig) -> Option<ConfigurableParser> {
-        let config = self.prepare_js_config(source).await?;
-        Some(ConfigurableParser::new(config))
-    }
-
-    #[allow(dead_code)]
-    async fn prepare_js_config(&self, source: &SourceWithConfig) -> Option<SourceConfig> {
-        let mut config = source.config.clone();
-        let needs_file = matches!(config.home.effective_engine(), ActionEngine::Js)
-            && config.script_path.is_none()
-            || matches!(config.details.effective_engine(), ActionEngine::Js)
-                && config.script_path.is_none()
-            || matches!(config.chapter.effective_engine(), ActionEngine::Js)
-                && config.script_path.is_none();
-
-        let file_script = if needs_file {
-            Some(self.load_js_script(source).await?)
-        } else {
-            None
-        };
-
-        // if matches!(config.home.effective_engine(), ActionEngine::Js)
-        //     && config.home.js_script().is_none()
-        // {
-        //     config.home.set_js_script(file_script.clone());
-        // }
-        // if matches!(config.details.effective_engine(), ActionEngine::Js)
-        //     && config.details.js_script().is_none()
-        // {
-        //     config.details.set_js_script(file_script.clone());
-        // }
-        // if matches!(config.chapter.effective_engine(), ActionEngine::Js)
-        //     && config.chapter.js_script().is_none()
-        // {
-        //     config.chapter.set_js_script(file_script.clone());
-        // }
-        // if let Some(search) = config.search.as_mut() {
-        //     if matches!(search.effective_engine(), ActionEngine::Js) && search.js_script().is_none()
-        //     {
-        //         search.set_js_script(file_script);
-        //     }
-        // }
-
-        Some(config)
     }
 
     #[allow(dead_code)]

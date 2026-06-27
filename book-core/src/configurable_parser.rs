@@ -51,7 +51,7 @@ impl ConfigurableParser {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let function_name = self.config.home.js_function().unwrap_or("parseHome");
+            let function_name = "parseHome";
             let parse_home_fn: Function = globals
                 .get(function_name)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -76,11 +76,7 @@ impl ConfigurableParser {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let function_name = self
-                .config
-                .details
-                .js_function()
-                .unwrap_or("parseBookDetails");
+            let function_name = "parseBookDetails";
             let parse_details_fn: Function = globals
                 .get(function_name)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -105,11 +101,7 @@ impl ConfigurableParser {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let function_name = self
-                .config
-                .chapters_list
-                .js_function()
-                .unwrap_or("parseChapters");
+            let function_name = "parseChapters";
             let parse_chapters_fn: Function = globals
                 .get(function_name)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -134,11 +126,7 @@ impl ConfigurableParser {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let function_name = self
-                .config
-                .chapter
-                .js_function()
-                .unwrap_or("parseChapterContent");
+            let function_name = "parseChapterContent";
             let parse_content_fn: Function = globals
                 .get(function_name)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -163,12 +151,7 @@ impl ConfigurableParser {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let globals = ctx.globals();
-            let function_name = self
-                .config
-                .search
-                .as_ref()
-                .and_then(|search| search.js_function())
-                .unwrap_or("parseSearch");
+            let function_name = "parseSearch";
             let parse_search_fn: Function = globals
                 .get(function_name)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;

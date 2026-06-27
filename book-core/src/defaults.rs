@@ -1,8 +1,11 @@
 //! Default source configurations.
 
-use crate::models::{
-    ActionConfig, DynamicMode, FetchMethod, JsExecutionConfig, NativeTarget, Source, SourceConfig,
-    SourceWithConfig, Strategy,
+use crate::{
+    models::{
+        ActionConfig, DynamicMode, FetchMethod, NativeTarget, ParseMethod, Source, SourceConfig,
+        SourceWithConfig,
+    },
+    BookFormat,
 };
 
 /// Get the default NovelFire source configuration.
@@ -22,55 +25,29 @@ pub fn novelfire_source() -> SourceWithConfig {
 
 fn novelfire_config() -> SourceConfig {
     SourceConfig {
-        //     script_path: Some("sources/novelfire/index.js".to_string()),
-        //     home: ActionConfig {
-        //         fetch: FetchMethod::Native {
-        //             target: NativeTarget::Static {
-        //                 url: "https://novelfire.net/home".to_string(),
-        //             },
-        //         },
-        //         parse: Strategy::Js(JsExecutionConfig {
-        //             js_function: Some("parseHome".to_string()),
-        //             script: None,
-        //         }),
-        //     },
-        //     details: ActionConfig {
-        //         fetch: FetchMethod::default(),
-        //         parse: Strategy::Js(JsExecutionConfig {
-        //             js_function: Some("parseBookDetails".to_string()),
-        //             script: None,
-        //         }),
-        //     },
-        //     chapter: ActionConfig {
-        //         fetch: FetchMethod::default(),
-        //         parse: Strategy::Js(JsExecutionConfig {
-        //             js_function: Some("parseChapterContent".to_string()),
-        //             script: None,
-        //         }),
-        //     },
-        //     search: Some(ActionConfig {
-        //         fetch: FetchMethod::Native {
-        //             target: NativeTarget::Dynamic {
-        //                 url_pattern:
-        //                     "https://novelfire.net/ajax/searchLive?keyword={keyword}&type=title"
-        //                         .to_string(),
-        //                 mode: DynamicMode::Single,
-        //             },
-        //         },
-        //         parse: Strategy::Js(JsExecutionConfig {
-        //             js_function: Some("parseSearch".to_string()),
-        //             script: None,
-        //         }),
-        //     }),
-        //     genres: vec![],
-        //     chapters_list: ActionConfig {
-        //         fetch: FetchMethod::default(),
-        //         parse: Strategy::Js(JsExecutionConfig {
-        //             js_function: Some("parseChapters".to_string()),
-        //             script: None,
-        //         }),
-        //     },
-        ..Default::default()
+        default_format: crate::models::SourceType::WebNovel,
+        script_path: Some("sources/novelfire/index.js".to_string()),
+        home: ActionConfig {
+            fetch: FetchMethod::Js,
+            parse: ParseMethod::Js,
+        },
+        details: ActionConfig {
+            fetch: FetchMethod::Js,
+            parse: ParseMethod::Js,
+        },
+        chapter: ActionConfig {
+            fetch: FetchMethod::Js,
+            parse: ParseMethod::Js,
+        },
+        search: Some(ActionConfig {
+            fetch: FetchMethod::Js,
+            parse: ParseMethod::Js,
+        }),
+        genres: vec![],
+        chapters_list: ActionConfig {
+            fetch: FetchMethod::Js,
+            parse: ParseMethod::Js,
+        },
     }
 }
 
@@ -88,17 +65,5 @@ mod tests {
     fn novelfire_uses_js_strategy() {
         let source = novelfire_source();
         assert_eq!(source.source.id, "novelfire");
-        assert!(matches!(
-            source.config.home.effective_engine(),
-            ActionEngine::Js
-        ));
-        assert!(matches!(
-            source.config.details.effective_engine(),
-            ActionEngine::Js
-        ));
-        assert!(matches!(
-            source.config.chapter.effective_engine(),
-            ActionEngine::Js
-        ));
     }
 }

@@ -38,6 +38,7 @@ pub struct Database {
 impl Database {
     pub async fn open_local() -> Result<Self, libsql::Error> {
         let path = platform::get_db_path();
+        println!("Database path is: {:?}", path); // <--- Add this line
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

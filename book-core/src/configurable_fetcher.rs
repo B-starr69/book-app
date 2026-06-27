@@ -67,29 +67,32 @@ impl ConfigurableFetcher {
     }
 
     pub fn fetch_home(&self) -> Result<String> {
-        let function_name = self.config.home.js_function().unwrap_or("fetchHome");
+        let function_name = "fetchHome";
         self.call_js_fetch_zero_args(function_name)
     }
 
     pub fn fetch_details(&self, book_id: &str) -> Result<String> {
-        let function_name = self.config.details.js_function().unwrap_or("fetchBookDetails");
+        let function_name = "fetchBookDetails";
         self.call_js_fetch_one_arg(function_name, book_id)
     }
 
     pub fn fetch_chapters_list(&self, book_id: &str) -> Result<String> {
-        let function_name = self.config.chapters_list.js_function().unwrap_or("fetchChaptersList");
+        let function_name = "fetchChaptersList";
         self.call_js_fetch_one_arg(function_name, book_id)
     }
 
     pub fn fetch_chapter_content(&self, book_id: &str, chapter_id: &str) -> Result<String> {
-        let function_name = self.config.chapter.js_function().unwrap_or("fetchChapterContent");
+        let function_name = "fetchChapterContent";
         self.call_js_fetch_two_args(function_name, book_id, chapter_id)
     }
 
     pub fn fetch_search(&self, keyword: &str, genre: Option<&str>) -> Result<String> {
-        let search_config = self.config.search.as_ref()
+        let search_config = self
+            .config
+            .search
+            .as_ref()
             .ok_or_else(|| anyhow!("Search capability is not configured for this source"))?;
-        let function_name = search_config.js_function().unwrap_or("fetchSearch");
+        let function_name = "fetchSearch";
 
         let rt = Runtime::new()?;
         let ctx = Context::full(&rt)?;
@@ -134,7 +137,12 @@ impl ConfigurableFetcher {
         })
     }
 
-    fn call_js_fetch_two_args(&self, function_name: &str, arg1: &str, arg2: &str) -> Result<String> {
+    fn call_js_fetch_two_args(
+        &self,
+        function_name: &str,
+        arg1: &str,
+        arg2: &str,
+    ) -> Result<String> {
         let rt = Runtime::new()?;
         let ctx = Context::full(&rt)?;
         ctx.with(|ctx| {

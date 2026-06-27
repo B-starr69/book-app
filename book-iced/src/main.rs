@@ -1,11 +1,10 @@
 use iced::widget::{Space, button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length, Task};
-use std::thread;
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
 
 use book_core::database::Database;
 use book_core::models::Book;
-use book_core::{HomeSection, SourceWithConfig};
+use book_core::{HomeSection, SourceWithConfig, defaults, importer};
 
 mod theme {
     use iced::Color;
@@ -37,15 +36,12 @@ fn bold_text<'a>(label: &'a str) -> iced::widget::Text<'a> {
 fn space_y(y: f32) -> Space {
     Space::new().height(y)
 }
-
 fn _space_x(x: f32) -> Space {
     Space::new().width(x)
 }
-
 fn space_fill_x() -> Space {
     Space::new().width(Length::Fill)
 }
-
 fn space_fill_y() -> Space {
     Space::new().height(Length::Fill)
 }
@@ -58,8 +54,9 @@ pub enum Tab {
     Settings,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Message {
+    DatabaseInitialized(Arc<Database>, Vec<SourceWithConfig>, Vec<Book>),
     TabSelected(Tab),
     LoadLibrary,
     LibraryLoaded(Vec<Book>),
@@ -75,43 +72,14 @@ enum Message {
     SearchResultsLoaded(Option<Vec<book_core::SearchResult>>),
 }
 
-pub enum DbCommand {
-    GetLibraryBooks {
-        responder: oneshot::Sender<Vec<Book>>,
-    },
-    ImportFromGithub {
-        repo_url: String,
-        base_dir: std::path::PathBuf,
-        responder: oneshot::Sender<Result<Vec<String>, String>>,
-    },
-    GetSources {
-        responder: oneshot::Sender<Vec<SourceWithConfig>>,
-    },
-}
-
-pub enum NetCommand {
-    FetchDiscoverPage {
-        source: SourceWithConfig,
-        responder: oneshot::Sender<Option<Vec<HomeSection>>>,
-    },
-    SearchBooks {
-        source: SourceWithConfig,
-        keyword: String,
-        responder: oneshot::Sender<Option<Vec<book_core::SearchResult>>>,
-    },
-}
-
 struct MyApp {
-    db_tx: mpsc::Sender<DbCommand>,
-    net_tx: mpsc::Sender<NetCommand>,
     active_tab: Tab,
     sources: Vec<SourceWithConfig>,
     discover_sections: Vec<HomeSection>,
     library_books: Vec<Book>,
     is_loading_library: bool,
     is_loading_discover: bool,
-
-    // Importer & Search State
+    database: Option<Arc<Database>>, // Changed to Option to handle async init
     github_url: String,
     import_status: Option<Result<String, String>>,
     is_importing: bool,
@@ -122,196 +90,104 @@ struct MyApp {
 }
 
 impl MyApp {
+    // In iced, `new` cannot be async. We return a Task that initializes the DB.
     pub fn new() -> (Self, Task<Message>) {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create startup runtime");
-
-        let (mut sources, library_books) = rt.block_on(async {
-            let database = Database::open_local()
-                .await
-                .expect("Failed to open local database");
-            let sources = database.get_sources().await.unwrap_or_default();
-            let library_books = database.get_library_books().await.unwrap_or_default();
-            (sources, library_books)
-        });
-
-        if sources.is_empty() {
-            sources.push(book_core::defaults::novelfire_source());
-        }
-
-        let selected_source_id = sources.first().map(|s| s.source.id.clone());
-
-        // DB thread
-        let (db_tx, mut db_rx) = mpsc::channel::<DbCommand>(100);
-        thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create database runtime");
-
-            rt.block_on(async move {
-                let db = Database::open_local()
-                    .await
-                    .expect("Failed to open local database");
-
-                while let Some(command) = db_rx.recv().await {
-                    match command {
-                        DbCommand::GetLibraryBooks { responder } => {
-                            let books = book_core::api::get_library_books(&db)
-                                .await
-                                .unwrap_or_default();
-                            let _ = responder.send(books);
-                        }
-                        DbCommand::ImportFromGithub {
-                            repo_url,
-                            base_dir,
-                            responder,
-                        } => {
-                            let result = book_core::import_from_github(&repo_url, &base_dir, &db)
-                                .await
-                                .map_err(|e| e.to_string());
-                            let _ = responder.send(result);
-                        }
-                        DbCommand::GetSources { responder } => {
-                            let sources = db.get_sources().await.unwrap_or_default();
-                            let _ = responder.send(sources);
-                        }
-                    }
-                }
-            });
-        });
-
-        // Network thread
-        let (net_tx, mut net_rx) = mpsc::channel::<NetCommand>(32);
-        thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create network runtime");
-
-            rt.block_on(async move {
-                while let Some(cmd) = net_rx.recv().await {
-                    match cmd {
-                        NetCommand::FetchDiscoverPage { source, responder } => {
-                            let result = book_core::api::get_discover_page(&source).await;
-                            println!("loading home called from GUI");
-                            let _ = responder.send(result);
-                        }
-                        NetCommand::SearchBooks {
-                            source,
-                            keyword,
-                            responder,
-                        } => {
-                            let result =
-                                book_core::api::search_books(&source, &keyword, None).await;
-                            let _ = responder.send(result);
-                        }
-                    }
-                }
-            });
-        });
-
         let app = Self {
-            db_tx,
-            net_tx,
-            sources,
+            database: None,
+            sources: Vec::new(),
             active_tab: Tab::Library,
-            library_books,
+            library_books: Vec::new(),
             is_loading_library: false,
             is_loading_discover: false,
             discover_sections: Vec::new(),
             github_url: String::new(),
             import_status: None,
             is_importing: false,
-            selected_source_id,
+            selected_source_id: None,
             search_keyword: String::new(),
             search_results: None,
             is_searching: false,
         };
 
-        let initial_task = Task::perform(async {}, |_| Message::LoadLibrary);
-        (app, initial_task)
+        let task = Task::perform(
+            async {
+                let db = Database::open_local()
+                    .await
+                    .expect("Failed to open local database");
+                let mut sources = db.get_sources().await.unwrap_or_default();
+                sources.push(book_core::defaults::novelfire_source());
+                let library_books = db.get_library_books().await.unwrap_or_default();
+                (Arc::new(db), sources, library_books)
+            },
+            |(db, sources, books)| Message::DatabaseInitialized(db, sources, books),
+        );
+
+        (app, task)
     }
 
+    // `update` is no longer async. We use `Task::perform` to run async operations.
     fn update(&mut self, message: Message) -> Task<Message> {
+        let database = match &self.database {
+            Some(db) => Arc::clone(db),
+            None => return Task::none(), // DB not initialized yet
+        };
+
         match message {
+            Message::DatabaseInitialized(db, sources, books) => {
+                self.database = Some(db);
+                self.sources = sources;
+                self.library_books = books;
+                self.selected_source_id = self.sources.first().map(|s| s.source.id.clone());
+                Task::none()
+            }
             Message::TabSelected(tab) => {
                 self.active_tab = tab;
                 match tab {
-                    Tab::Library => {
-                        if self.library_books.is_empty() {
-                            return Task::perform(async {}, |_| Message::LoadLibrary);
-                        }
+                    Tab::Library if self.library_books.is_empty() => {
+                        Task::done(Message::LoadLibrary)
                     }
-                    Tab::Discover => {
-                        if self.discover_sections.is_empty() {
-                            return Task::perform(async {}, |_| Message::LoadDiscoverData);
-                        }
+                    Tab::Discover if self.discover_sections.is_empty() => {
+                        Task::done(Message::LoadDiscoverData)
                     }
-                    _ => {}
+                    _ => Task::none(),
                 }
-                Task::none()
             }
-
             Message::LoadLibrary => {
                 self.is_loading_library = true;
-                let tx = self.db_tx.clone();
-
-                Task::future(async move {
-                    let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx
-                        .send(DbCommand::GetLibraryBooks { responder: resp_tx })
-                        .await;
-                    let books = resp_rx.await.unwrap_or_default();
-                    Message::LibraryLoaded(books)
-                })
+                Task::perform(
+                    async move { database.get_library_books().await.unwrap_or_default() },
+                    Message::LibraryLoaded,
+                )
             }
-
             Message::LibraryLoaded(books) => {
                 self.is_loading_library = false;
                 self.library_books = books;
                 Task::none()
             }
-
             Message::LoadDiscoverData => {
                 self.is_loading_discover = true;
-                let tx = self.net_tx.clone();
-                let source = match &self.selected_source_id {
-                    Some(id) => self.sources.iter().find(|s| s.source.id == *id).cloned(),
-                    None => self.sources.first().cloned(),
-                };
-                let source = match source {
-                    Some(s) => s,
-                    None => {
-                        self.is_loading_discover = false;
-                        return Task::none();
-                    }
-                };
-                Task::future(async move {
-                    let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx
-                        .send(NetCommand::FetchDiscoverPage {
-                            source,
-                            responder: resp_tx,
-                        })
-                        .await;
-                    let result = resp_rx.await.unwrap_or(None);
-                    Message::DiscoverDataLoaded(result)
-                })
-            }
+                let source = self
+                    .sources
+                    .iter()
+                    .find(|s| Some(&s.source.id) == self.selected_source_id.as_ref())
+                    .or_else(|| self.sources.first())
+                    .cloned();
 
+                if let Some(source) = source {
+                    Task::perform(
+                        async move { book_core::api::get_discover_page(&source).await },
+                        Message::DiscoverDataLoaded,
+                    )
+                } else {
+                    self.is_loading_discover = false;
+                    Task::none()
+                }
+            }
             Message::DiscoverDataLoaded(sections) => {
                 self.is_loading_discover = false;
-                if let Some(data) = sections {
-                    self.discover_sections = data;
-                } else {
-                    self.discover_sections.clear();
-                }
+                self.discover_sections = sections.unwrap_or_default();
                 Task::none()
             }
-
             Message::GithubUrlChanged(url) => {
                 self.github_url = url;
                 Task::none()
@@ -321,26 +197,30 @@ impl MyApp {
                 if self.github_url.trim().is_empty() {
                     return Task::none();
                 }
+
                 self.is_importing = true;
                 self.import_status = None;
-                let tx = self.db_tx.clone();
+
                 let repo_url = self.github_url.clone();
                 let base_dir = std::env::current_dir().unwrap_or_default();
 
-                Task::future(async move {
-                    let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx
-                        .send(DbCommand::ImportFromGithub {
-                            repo_url,
-                            base_dir,
-                            responder: resp_tx,
-                        })
-                        .await;
-                    let result = resp_rx
-                        .await
-                        .unwrap_or(Err("Database channel closed".to_string()));
-                    Message::SourcesImported(result)
-                })
+                // 1. Clone the Option<Arc<Database>> before the async block moves ownership
+                let database = self.database.clone();
+
+                Task::perform(
+                    async move {
+                        // 2. Unwrap the cloned Option safely inside the block
+                        let db_client = database.expect("Database should be initialized");
+
+                        // 3. Perform the import, mapping the Result to match your Message payload
+                        let gitres = importer::import_from_github(&repo_url, &base_dir, &db_client)
+                            .await
+                            .map_err(|e| e.to_string()); // <--- Converts Error to String
+
+                        Message::SourcesImported(gitres)
+                    },
+                    |msg| msg, // Mapper function required by most Elm/Iced-style Task systems
+                )
             }
 
             Message::SourcesImported(result) => {
@@ -354,22 +234,17 @@ impl MyApp {
                         )));
                         self.github_url.clear();
 
-                        // Trigger reload of sources
-                        let tx = self.db_tx.clone();
-                        return Task::future(async move {
-                            let (resp_tx, resp_rx) = oneshot::channel();
-                            let _ = tx.send(DbCommand::GetSources { responder: resp_tx }).await;
-                            let sources = resp_rx.await.unwrap_or_default();
-                            Message::SourcesLoaded(sources)
-                        });
+                        Task::perform(
+                            async move { database.get_sources().await.unwrap_or_default() },
+                            Message::SourcesLoaded,
+                        )
                     }
                     Err(err) => {
                         self.import_status = Some(Err(format!("Import failed: {}", err)));
+                        Task::none()
                     }
                 }
-                Task::none()
             }
-
             Message::SourcesLoaded(sources) => {
                 self.sources = sources;
                 if self.selected_source_id.is_none() {
@@ -377,48 +252,38 @@ impl MyApp {
                 }
                 Task::none()
             }
-
             Message::SourceSelected(id) => {
                 self.selected_source_id = Some(id);
                 self.discover_sections.clear();
-                Task::perform(async {}, |_| Message::LoadDiscoverData)
+                Task::done(Message::LoadDiscoverData)
             }
-
             Message::SearchKeywordChanged(keyword) => {
                 self.search_keyword = keyword;
                 Task::none()
             }
-
             Message::TriggerSearch => {
                 if self.search_keyword.trim().is_empty() {
                     return Task::none();
                 }
-                let source = match &self.selected_source_id {
-                    Some(id) => self.sources.iter().find(|s| s.source.id == *id).cloned(),
-                    None => self.sources.first().cloned(),
-                };
-                let source = match source {
-                    Some(s) => s,
-                    None => return Task::none(),
-                };
-                self.is_searching = true;
-                self.search_results = None;
-                let tx = self.net_tx.clone();
-                let keyword = self.search_keyword.clone();
-                Task::future(async move {
-                    let (resp_tx, resp_rx) = oneshot::channel();
-                    let _ = tx
-                        .send(NetCommand::SearchBooks {
-                            source,
-                            keyword,
-                            responder: resp_tx,
-                        })
-                        .await;
-                    let results = resp_rx.await.unwrap_or(None);
-                    Message::SearchResultsLoaded(results)
-                })
-            }
+                let source = self
+                    .sources
+                    .iter()
+                    .find(|s| Some(&s.source.id) == self.selected_source_id.as_ref())
+                    .or_else(|| self.sources.first())
+                    .cloned();
 
+                if let Some(source) = source {
+                    self.is_searching = true;
+                    self.search_results = None;
+                    let keyword = self.search_keyword.clone();
+                    Task::perform(
+                        async move { book_core::api::search_books(&source, &keyword, None).await },
+                        Message::SearchResultsLoaded,
+                    )
+                } else {
+                    Task::none()
+                }
+            }
             Message::SearchResultsLoaded(results) => {
                 self.is_searching = false;
                 self.search_results = results;
@@ -427,6 +292,7 @@ impl MyApp {
         }
     }
 
+    // --- View Methods (Unchanged) ---
     fn nav_button<'a>(&self, label: &'a str, tab: Tab, is_selected: bool) -> Element<'a, Message> {
         let label_text = bold_text(label).size(15).color(if is_selected {
             theme::TEXT_SLATE_50

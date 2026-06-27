@@ -120,21 +120,19 @@ pub enum SectionLayout {
 pub type SearchResult = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "engine", rename_all = "snake_case")]
 pub enum FetchMethod {
-    Native {
+    Rust {
         #[serde(flatten)]
         target: NativeTarget,
     },
-    Js {
-        js_function: Option<String>,
-    },
+    Js,
     HeadlessBrowser,
 }
 
 impl Default for FetchMethod {
     fn default() -> Self {
-        FetchMethod::Native {
+        FetchMethod::Rust {
             target: NativeTarget::Static { url: String::new() },
         }
     }
@@ -218,20 +216,15 @@ pub struct ParsedChapter {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "engine", rename_all = "snake_case")]
-pub enum Strategy {
+pub enum ParseMethod {
     Rust,
-    Js(JsExecutionConfig),
+    Js,
 }
 
-impl Default for Strategy {
+impl Default for ParseMethod {
     fn default() -> Self {
-        Strategy::Rust
+        ParseMethod::Rust
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct JsExecutionConfig {
-    pub js_function: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -239,42 +232,7 @@ pub struct ActionConfig {
     #[serde(default)]
     pub fetch: FetchMethod,
     #[serde(default)]
-    pub parse: Strategy,
-}
-
-impl ActionConfig {
-    pub fn effective_engine(&self) -> ActionEngine {
-        match &self.parse {
-            Strategy::Rust => ActionEngine::Rust,
-            Strategy::Js(_) => ActionEngine::Js,
-        }
-    }
-
-    // pub fn js_script(&self) -> Option<&str> {
-    //     match &self.parse {
-    //         Strategy::Js(config) => config.script.as_deref(),
-    //         Strategy::Rust => None,
-    //     }
-    // }
-
-    // pub fn set_js_script(&mut self, script: Option<String>) {
-    //     if let Strategy::Js(ref mut config) = self.parse {
-    //         config.script = script;
-    //     }
-    // }
-
-    pub fn js_function(&self) -> Option<&str> {
-        match &self.parse {
-            Strategy::Js(config) => config.js_function.as_deref(),
-            Strategy::Rust => None,
-        }
-    }
-
-    pub fn set_js_function(&mut self, func: Option<String>) {
-        if let Strategy::Js(ref mut config) = self.parse {
-            config.js_function = func;
-        }
-    }
+    pub parse: ParseMethod,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
