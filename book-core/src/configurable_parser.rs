@@ -1,11 +1,11 @@
 use crate::models::{
     HomeSection, ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult, SourceConfig,
 };
-
-use anyhow::Result;
-use rquickjs::{Context, Function, Runtime, Value};
+use crate::platform;
+use anyhow::{anyhow, Context, Result};
+use rquickjs::{Function, Runtime, Value};
 use serde::de::DeserializeOwned;
-
+use std::path::PathBuf;
 /// A parser that uses JavaScript via QuickJS for sources that need custom logic.
 pub struct ConfigurableParser {
     config: SourceConfig,
@@ -37,28 +37,64 @@ impl ConfigurableParser {
         let json_str: String = stringify_fn
             .call((value,))
             .map_err(|e| anyhow::anyhow!("JSON.stringify failed: {}", e))?;
-        serde_json::from_str(&json_str)
-            .map_err(|e| anyhow::anyhow!("JSON deserialization failed: {}", e))
+        serde_json::from_str(&json_str).with_context(|| {
+            format!(
+                "JSON deserialization failed into Rust type. Raw JSON output was:\n{}",
+                json_str
+            )
+        })
     }
+    fn get_script_content(&self) -> String {
+        if let Some(ref path) = self.config.script_path {
+            let path_buf = PathBuf::from(path);
+            let mut resolved = if path_buf.is_absolute() {
+                path_buf.clone()
+            } else if path_buf.exists() {
+                path_buf.clone()
+            } else {
+                platform::get_app_data_dir().join(&path_buf)
+            };
 
+            if !resolved.exists() && path_buf.is_relative() {
+                if let Ok(cwd) = std::env::current_dir() {
+                    let mut current = cwd.as_path();
+                    while let Some(parent) = current.parent() {
+                        let candidate = parent.join(&path_buf);
+                        if candidate.exists() {
+                            resolved = candidate;
+                            break;
+                        }
+                        current = parent;
+                    }
+                }
+            }
+            std::fs::read_to_string(resolved).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    }
     /// Parse the home/discover page using a JS function.
     pub fn parse_home(&self, html: &str, _base_url: &str) -> Result<Vec<HomeSection>> {
-        let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
+        let rt = Runtime::new().map_err(|e| anyhow!("Failed to create JS runtime: {e}"))?;
+        let ctx = rquickjs::Context::full(&rt)
+            .map_err(|e| anyhow!("Failed to create JS context: {e}"))?;
+
         ctx.with(|ctx| {
-            let script = self.config.clone().script_path.unwrap();
+            let script = Self::get_script_content(&self);
             ctx.eval::<(), _>(script.as_bytes())
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                .map_err(|e| anyhow!("JS evaluation failed: {e}"))?;
 
             let globals = ctx.globals();
             let function_name = "parseHome";
             let parse_home_fn: Function = globals
                 .get(function_name)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                .map_err(|e| anyhow!("Failed to find JS function '{function_name}': {e}"))?;
 
             let value: Value = parse_home_fn
                 .call((html,))
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                .map_err(|e| anyhow!("JS function '{function_name}' execution failed: {e}"))?;
+
+            // This will now automatically include the JSON dump if mapping fails
             let sections: Vec<HomeSection> = Self::js_value_to_rust(&ctx, value)?;
 
             Ok(sections)
@@ -68,7 +104,7 @@ impl ConfigurableParser {
     /// Parse book details page using a JS function.
     pub fn parse_book_details(&self, html: &str, _book_id: String) -> Result<ParsedBookDetails> {
         let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
             let script = self.config.clone().script_path.unwrap();
@@ -93,7 +129,7 @@ impl ConfigurableParser {
     /// Parse just the chapters list from a dedicated chapters page.
     pub fn parse_chapters_only(&self, html: &str) -> Result<Vec<ParsedChapterInfo>> {
         let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
             let script = self.config.clone().script_path.unwrap();
@@ -118,7 +154,7 @@ impl ConfigurableParser {
     /// Parse chapter content page using a JS function.
     pub fn parse_chapter_content(&self, html: &str) -> Result<ParsedChapter> {
         let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
             let script = self.config.clone().script_path.unwrap();
@@ -143,7 +179,7 @@ impl ConfigurableParser {
     /// Parse search results using a JS function.
     pub fn parse_search_results(&self, payload: &str) -> Result<Vec<SearchResult>> {
         let rt = Runtime::new().unwrap();
-        let ctx = Context::full(&rt).unwrap();
+        let ctx = rquickjs::Context::full(&rt).unwrap();
 
         ctx.with(|ctx| {
             let script = self.config.clone().script_path.unwrap();

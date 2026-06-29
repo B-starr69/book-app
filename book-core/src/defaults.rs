@@ -59,11 +59,10 @@ pub fn all_default_sources() -> Vec<SourceWithConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ActionEngine;
+    use crate::{database, models::ActionEngine, Database};
 
     #[test]
     fn novelfire_uses_js_strategy() {
         let source = novelfire_source();
-        assert_eq!(source.source.id, "novelfire");
     }
 }

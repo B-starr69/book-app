@@ -3,9 +3,8 @@ use iced::{Alignment, Element, Length, Task};
 use std::sync::Arc;
 
 use book_core::database::Database;
-use book_core::models::Book;
+use book_core::models::{Book, Novel, Source, WebNovel};
 use book_core::{HomeSection, SourceWithConfig, defaults, importer};
-
 mod theme {
     use iced::Color;
 
@@ -70,13 +69,14 @@ enum Message {
     SearchKeywordChanged(String),
     TriggerSearch,
     SearchResultsLoaded(Option<Vec<book_core::SearchResult>>),
+    BookFetched(Result<Book, String>),
 }
 
 struct MyApp {
     active_tab: Tab,
     sources: Vec<SourceWithConfig>,
     discover_sections: Vec<HomeSection>,
-    library_books: Vec<Book>,
+    books: Vec<Book>,
     is_loading_library: bool,
     is_loading_discover: bool,
     database: Option<Arc<Database>>, // Changed to Option to handle async init
@@ -96,7 +96,7 @@ impl MyApp {
             database: None,
             sources: Vec::new(),
             active_tab: Tab::Library,
-            library_books: Vec::new(),
+            books: Vec::new(),
             is_loading_library: false,
             is_loading_discover: false,
             discover_sections: Vec::new(),
@@ -114,8 +114,8 @@ impl MyApp {
                 let db = Database::open_local()
                     .await
                     .expect("Failed to open local database");
-                let mut sources = db.get_sources().await.unwrap_or_default();
-                sources.push(book_core::defaults::novelfire_source());
+                let sources = db.get_sources().await.unwrap_or_default();
+                //sources.push(book_core::defaults::novelfire_source());
                 let library_books = db.get_library_books().await.unwrap_or_default();
                 (Arc::new(db), sources, library_books)
             },
@@ -127,25 +127,18 @@ impl MyApp {
 
     // `update` is no longer async. We use `Task::perform` to run async operations.
     fn update(&mut self, message: Message) -> Task<Message> {
-        let database = match &self.database {
-            Some(db) => Arc::clone(db),
-            None => return Task::none(), // DB not initialized yet
-        };
-
         match message {
             Message::DatabaseInitialized(db, sources, books) => {
                 self.database = Some(db);
                 self.sources = sources;
-                self.library_books = books;
+                self.books = books;
                 self.selected_source_id = self.sources.first().map(|s| s.source.id.clone());
                 Task::none()
             }
             Message::TabSelected(tab) => {
                 self.active_tab = tab;
                 match tab {
-                    Tab::Library if self.library_books.is_empty() => {
-                        Task::done(Message::LoadLibrary)
-                    }
+                    Tab::Library if self.books.is_empty() => Task::done(Message::LoadLibrary),
                     Tab::Discover if self.discover_sections.is_empty() => {
                         Task::done(Message::LoadDiscoverData)
                     }
@@ -153,15 +146,21 @@ impl MyApp {
                 }
             }
             Message::LoadLibrary => {
-                self.is_loading_library = true;
-                Task::perform(
-                    async move { database.get_library_books().await.unwrap_or_default() },
-                    Message::LibraryLoaded,
-                )
+                // Safely grab the database clone only when needed
+                if let Some(database) = &self.database {
+                    let database = Arc::clone(database);
+                    self.is_loading_library = true;
+                    Task::perform(
+                        async move { database.get_library_books().await.unwrap_or_default() },
+                        Message::LibraryLoaded,
+                    )
+                } else {
+                    Task::none()
+                }
             }
             Message::LibraryLoaded(books) => {
                 self.is_loading_library = false;
-                self.library_books = books;
+                self.books = books;
                 Task::none()
             }
             Message::LoadDiscoverData => {
@@ -173,7 +172,10 @@ impl MyApp {
                     .or_else(|| self.sources.first())
                     .cloned();
 
-                if let Some(source) = source {
+                if let Some(source) = source
+                    && (source.source.id != "local")
+                {
+                    println!("still running");
                     Task::perform(
                         async move { book_core::api::get_discover_page(&source).await },
                         Message::DiscoverDataLoaded,
@@ -184,45 +186,95 @@ impl MyApp {
                 }
             }
             Message::DiscoverDataLoaded(sections) => {
+                let source = self
+                    .sources
+                    .iter()
+                    .find(|s| Some(&s.source.id) == self.selected_source_id.as_ref())
+                    .or_else(|| self.sources.first())
+                    .cloned();
+
                 self.is_loading_discover = false;
                 self.discover_sections = sections.unwrap_or_default();
+
+                let ids: Vec<String> = self
+                    .discover_sections
+                    .iter()
+                    .flat_map(|section| section.books.clone())
+                    .collect();
+
+                // Create a list of Tasks to fetch the missing books concurrently
+                let fetch_tasks: Vec<Task<Message>> = ids
+                    .into_iter()
+                    // Filter out books we already have in our local state
+                    .filter(|id| !self.books.iter().any(|b| b.id() == id))
+                    .filter_map(|id| {
+                        // We need a source to fetch the book. If we don't have one, skip.
+                        source.clone().map(|src| {
+                            let db = Arc::clone(&self.database.unwrap());
+
+                            // Use Task::perform to run the async function
+                            Task::perform(
+                                async move {
+                                    // FIX 1: Dereference the Arc (&*) to pass &Database
+                                    book_core::api::get_book(&*db, &src, &id).await
+                                },
+                                // FIX 2: Map the Result directly to your new Message variant
+                                Message::BookFetched,
+                            )
+                        })
+                    })
+                    .collect();
+
+                // Return the batched tasks so iced can execute them in the background
+                Task::batch(fetch_tasks)
+            }
+
+            // Handle the result when the background tasks finish
+            Message::BookFetched(result) => {
+                match result {
+                    Ok(book) => {
+                        self.books.push(book);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to fetch book: {}", e);
+                        // Optionally: set an error flag in your model to show a UI toast/alert
+                    }
+                }
                 Task::none()
             }
             Message::GithubUrlChanged(url) => {
                 self.github_url = url;
                 Task::none()
             }
-
             Message::ImportSources => {
                 if self.github_url.trim().is_empty() {
                     return Task::none();
                 }
 
-                self.is_importing = true;
-                self.import_status = None;
+                // Safely clone here where it's needed
+                if let Some(database) = &self.database {
+                    self.is_importing = true;
+                    self.import_status = None;
 
-                let repo_url = self.github_url.clone();
-                let base_dir = std::env::current_dir().unwrap_or_default();
+                    let repo_url = self.github_url.clone();
+                    let base_dir = std::env::current_dir().unwrap_or_default();
+                    let database = database.clone();
 
-                // 1. Clone the Option<Arc<Database>> before the async block moves ownership
-                let database = self.database.clone();
-
-                Task::perform(
-                    async move {
-                        // 2. Unwrap the cloned Option safely inside the block
-                        let db_client = database.expect("Database should be initialized");
-
-                        // 3. Perform the import, mapping the Result to match your Message payload
-                        let gitres = importer::import_from_github(&repo_url, &base_dir, &db_client)
-                            .await
-                            .map_err(|e| e.to_string()); // <--- Converts Error to String
-
-                        Message::SourcesImported(gitres)
-                    },
-                    |msg| msg, // Mapper function required by most Elm/Iced-style Task systems
-                )
+                    Task::perform(
+                        async move {
+                            let db_client = database;
+                            let gitres =
+                                importer::import_from_github(&repo_url, &base_dir, &db_client)
+                                    .await
+                                    .map_err(|e| e.to_string()); // thread panicking when running this function
+                            Message::SourcesImported(gitres)
+                        },
+                        |msg| msg,
+                    )
+                } else {
+                    Task::none()
+                }
             }
-
             Message::SourcesImported(result) => {
                 self.is_importing = false;
                 match result {
@@ -234,10 +286,15 @@ impl MyApp {
                         )));
                         self.github_url.clear();
 
-                        Task::perform(
-                            async move { database.get_sources().await.unwrap_or_default() },
-                            Message::SourcesLoaded,
-                        )
+                        if let Some(database) = &self.database {
+                            let database = database.clone();
+                            Task::perform(
+                                async move { database.get_sources().await.unwrap_or_default() },
+                                Message::SourcesLoaded,
+                            )
+                        } else {
+                            Task::none()
+                        }
                     }
                     Err(err) => {
                         self.import_status = Some(Err(format!("Import failed: {}", err)));
@@ -291,7 +348,6 @@ impl MyApp {
             }
         }
     }
-
     // --- View Methods (Unchanged) ---
     fn nav_button<'a>(&self, label: &'a str, tab: Tab, is_selected: bool) -> Element<'a, Message> {
         let label_text = bold_text(label).size(15).color(if is_selected {
@@ -328,14 +384,10 @@ impl MyApp {
         let sidebar = container(
             column![
                 // App Logo / Title
-                container(
-                    bold_text("📚 ANTIGRAVITY")
-                        .size(20)
-                        .color(theme::TEXT_SLATE_50)
-                )
-                .padding(20)
-                .width(Length::Fill)
-                .align_x(Alignment::Center),
+                container(bold_text("novel app").size(20).color(theme::TEXT_SLATE_50))
+                    .padding(20)
+                    .width(Length::Fill)
+                    .align_x(Alignment::Center),
                 // Navigation Options
                 self.nav_button("Library", Tab::Library, self.active_tab == Tab::Library),
                 self.nav_button("Discover", Tab::Discover, self.active_tab == Tab::Discover),
@@ -419,7 +471,7 @@ impl MyApp {
             .align_x(Alignment::Center)
             .align_y(Alignment::Center)
             .into()
-        } else if self.library_books.is_empty() {
+        } else if self.books.is_empty() {
             container(
                 column![
                     bold_text("Your library is empty")
@@ -438,7 +490,7 @@ impl MyApp {
             .align_y(Alignment::Center)
             .into()
         } else {
-            let books_col = column(self.library_books.iter().map(|book| {
+            let books_col = column(self.books.iter().map(|book| {
                 let base = book.base();
                 let cover = container(text("📖").size(32))
                     .width(Length::Fixed(60.0))
@@ -1005,4 +1057,87 @@ pub fn main() -> iced::Result {
         .title("Antigravity Novel Reader")
         .theme(get_theme)
         .run()
+}
+pub trait RenderIcedBook<Message: 'static> {
+    /// Renders the external view (Card) for library grids/lists
+    fn render_card(&self) -> Element<'_, Message>;
+
+    /// Renders the detailed view (Page) when the book is clicked
+    fn render_detail(&self) -> Element<'_, Message>;
+}
+
+impl<Message: 'static> RenderIcedBook<Message> for Novel {
+    fn render_card(&self) -> Element<'_, Message> {
+        column![
+            // Note: iced's `image` widget typically requires a local path or bytes.
+            // If `cover_url` is a URL, you might need a custom widget or async image loader.
+            // image(&self.base.cover_url).width(120).height(160),
+            text(&self.base.title).size(20),
+            text(&self.base.author).size(14),
+            text(format!("Rating: {:.1} ⭐", self.base.rating)).size(12),
+            text(format!("Progress: {:.0}%", self.progress * 100.0)).size(12),
+        ]
+        .spacing(5)
+        .padding(10)
+        .into()
+    }
+
+    fn render_detail(&self) -> Element<'_, Message> {
+        column![
+            text(&self.base.title).size(28),
+            text(&self.base.author).size(18),
+            text(format!("Format: {:?}", self.format)),
+            text(format!(
+                "File Path: {}",
+                self.file_path.as_deref().unwrap_or("Not downloaded yet")
+            )),
+            text(format!("Progress: {:.0}%", self.progress * 100.0)),
+            text("Summary:").size(18),
+            text(&self.base.summary),
+            text(format!("Genres: {}", self.base.genres.join(", "))),
+            text(format!("Status: {}", self.base.status)),
+        ]
+        .spacing(10)
+        .padding(20)
+        .into()
+    }
+}
+
+impl<Message: 'static> RenderIcedBook<Message> for WebNovel {
+    fn render_card(&self) -> Element<'_, Message> {
+        column![
+            // image(&self.base.cover_url).width(120).height(160),
+            text(&self.base.title).size(20),
+            text(&self.base.author).size(14),
+            text(format!("Rating: {:.1} ⭐", self.base.rating)).size(12),
+            text(format!("Chapters: {}", self.chapters_count)).size(12),
+        ]
+        .spacing(5)
+        .padding(10)
+        .into()
+    }
+
+    fn render_detail(&self) -> Element<'_, Message> {
+        let mut details = column![
+            text(&self.base.title).size(28),
+            text(&self.base.author).size(18),
+            text(format!("Chapters Count: {}", self.chapters_count)),
+            text("Summary:").size(18),
+            text(&self.base.summary),
+            text(format!("Genres: {}", self.base.genres.join(", "))),
+            text(format!("Status: {}", self.base.status)),
+            text("Chapters List:").size(18),
+        ]
+        .spacing(10);
+
+        // Append chapters to the column
+        for chapter in &self.chapters {
+            details = details.push(
+                // You can wrap this in a `button` later to trigger a "ReadChapter" message
+                text(format!("- {}", chapter.title)),
+            );
+        }
+
+        scrollable(details.padding(20)).height(Length::Fill).into()
+    }
 }

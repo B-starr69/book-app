@@ -63,7 +63,6 @@ pub async fn get_chapter_content(
 /// Get discover/home page sections for a source.
 pub async fn get_discover_page(source: &SourceWithConfig) -> Option<Vec<HomeSection>> {
     let fetcher = Fetcher::new();
-    println!("Calling load home from api.rs");
 
     match fetcher.get_home(source).await {
         Ok(sections) => Some(sections),
@@ -148,7 +147,5 @@ mod tests {
         let sources = database.get_sources().await.unwrap();
         let novelfire = novelfire_source();
         let result = get_discover_page(&novelfire).await.unwrap();
-        println!("{:?}", result);
-        println!("{:?}", sources);
     }
 }

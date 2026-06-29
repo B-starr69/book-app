@@ -245,6 +245,7 @@ impl Fetcher {
 
     pub async fn get_home(&self, source: &SourceWithConfig) -> Result<Vec<HomeSection>, String> {
         // 1. Fetching Phase
+        let config_clone = source.config.clone();
         let html = match &source.config.home.fetch {
             FetchMethod::Rust { .. } => {
                 let url = Self::resolve_home_url(source);
@@ -256,13 +257,26 @@ impl Fetcher {
                 })?
             }
             FetchMethod::Js { .. } => {
-                let fetcher = ConfigurableFetcher::new(source.config.clone());
-                fetcher.fetch_home().map_err(|e| {
+                // 1. Define the variables you need to move into the background thread
+                let config_clone = source.config.clone();
+                let source_name = source.source.name.clone(); // Cloning the name is a good practice to avoid holding references across the .await
+
+                // 2. Run the blocking JS fetch on a background thread
+                tokio::task::spawn_blocking(move || {
+                    let fetcher = ConfigurableFetcher::new(config_clone);
+                    fetcher.fetch_home()
+                })
+                .await
+                // 3. Handle Tokio's JoinError (if the background thread panicked)
+                .map_err(|e| {
                     format!(
-                        "JS fetch script execution failed for '{}': {e}",
-                        source.source.name
+                        "JS fetch script execution panicked for '{}': {e}",
+                        source_name
                     )
                 })?
+                // 4. Handle the actual error returned by fetch_home()
+                .map_err(|e| format!("JS fetch failed: {e}"))?
+                // ^^^ NO SEMICOLON! This allows the String to be returned.
             }
             FetchMethod::HeadlessBrowser => {
                 return Err(format!(
@@ -271,7 +285,6 @@ impl Fetcher {
                 ));
             }
         };
-
         // 2. Parsing Phase
         match &source.config.home.parse {
             ParseMethod::Rust => Err(format!(
