@@ -51,16 +51,29 @@ impl ConfigurableFetcher {
         globals.set(
             "fetchUrl",
             rquickjs::Function::new(ctx.clone(), |url: String| -> Result<String, rquickjs::Error> {
-                let client = reqwest::blocking::Client::builder()
-                    .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .build()
-                    .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
-                let resp = client.get(&url)
-                    .send()
-                    .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
-                let text = resp.text()
-                    .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
-                Ok(text)
+                // 1. Get the handle to the main Tokio runtime.
+                // Because this is called from within `spawn_blocking`, we are on a Tokio thread,
+                // so `Handle::current()` is guaranteed to work.
+                let handle = tokio::runtime::Handle::current();
+
+                // 2. Use `block_on` to run the async reqwest code on this blocking thread.
+                handle.block_on(async {
+                    let client = reqwest::Client::builder()
+                        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                        .build()
+                        .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
+
+                    let resp = client.get(&url)
+                        .send()
+                        .await // <--- Now using the async version!
+                        .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
+
+                    let text = resp.text()
+                        .await // <--- Now using the async version!
+                        .map_err(|e| rquickjs::Error::new_into_js_message("reqwest", "std::string::String", e.to_string()))?;
+
+                    Ok(text)
+                })
             })?,
         )?;
         Ok(())

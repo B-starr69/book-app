@@ -69,7 +69,7 @@ enum Message {
     SearchKeywordChanged(String),
     TriggerSearch,
     SearchResultsLoaded(Option<Vec<book_core::SearchResult>>),
-    BookFetched(Result<Book, String>),
+    BookFetched(Option<Book>),
 }
 
 struct MyApp {
@@ -160,7 +160,7 @@ impl MyApp {
             }
             Message::LibraryLoaded(books) => {
                 self.is_loading_library = false;
-                self.books = books;
+                self.books.extend(books);
                 Task::none()
             }
             Message::LoadDiscoverData => {
@@ -202,41 +202,48 @@ impl MyApp {
                     .flat_map(|section| section.books.clone())
                     .collect();
 
-                // Create a list of Tasks to fetch the missing books concurrently
-                let fetch_tasks: Vec<Task<Message>> = ids
-                    .into_iter()
-                    // Filter out books we already have in our local state
-                    .filter(|id| !self.books.iter().any(|b| b.id() == id))
-                    .filter_map(|id| {
-                        // We need a source to fetch the book. If we don't have one, skip.
-                        source.clone().map(|src| {
-                            let db = Arc::clone(&self.database.unwrap());
+                // 1. SAFELY get the database to prevent panics
+                let db = match &self.database {
+                    Some(db) => Arc::clone(db),
+                    None => return Task::none(), // DB not ready, abort gracefully
+                };
 
-                            // Use Task::perform to run the async function
+                // 2. PERFORMANCE: Use a HashSet for O(1) lookups instead of scanning the Vec
+                let existing_ids: std::collections::HashSet<_> =
+                    self.books.iter().map(|b| b.id().to_string()).collect();
+
+                // 3. CONCURRENCY: Filter missing IDs and limit to 10 at a time
+                // to prevent API rate limits and network storms
+                let ids_to_fetch: Vec<String> = ids
+                    .into_iter()
+                    .filter(|id| !existing_ids.contains(id))
+                    .take(10)
+                    .collect();
+
+                let fetch_tasks: Vec<Task<Message>> = ids_to_fetch
+                    .into_iter()
+                    .filter_map(|id| {
+                        source.clone().map(|src| {
+                            let db = Arc::clone(&db);
                             Task::perform(
-                                async move {
-                                    // FIX 1: Dereference the Arc (&*) to pass &Database
-                                    book_core::api::get_book(&*db, &src, &id).await
-                                },
-                                // FIX 2: Map the Result directly to your new Message variant
+                                async move { book_core::api::get_book(&*db, &src, &id).await },
                                 Message::BookFetched,
                             )
                         })
                     })
                     .collect();
 
-                // Return the batched tasks so iced can execute them in the background
                 Task::batch(fetch_tasks)
             }
-
             // Handle the result when the background tasks finish
             Message::BookFetched(result) => {
                 match result {
-                    Ok(book) => {
+                    Some(book) => {
+                        println!("{:?}", &book.id());
                         self.books.push(book);
                     }
-                    Err(e) => {
-                        eprintln!("Failed to fetch book: {}", e);
+                    None => {
+                        println!("Failed to fetch book: ");
                         // Optionally: set an error flag in your model to show a UI toast/alert
                     }
                 }
@@ -266,7 +273,7 @@ impl MyApp {
                             let gitres =
                                 importer::import_from_github(&repo_url, &base_dir, &db_client)
                                     .await
-                                    .map_err(|e| e.to_string()); // thread panicking when running this function
+                                    .map_err(|e| e.to_string());
                             Message::SourcesImported(gitres)
                         },
                         |msg| msg,
@@ -645,44 +652,52 @@ impl MyApp {
         } else {
             let sections_col = column(self.discover_sections.iter().map(|section| {
                 let books_row = row(section.books.iter().map(|book_name| {
-                    container(
-                        column![
-                            container(text("📖").size(24))
-                                .width(Length::Fixed(40.0))
-                                .height(Length::Fixed(40.0))
-                                .align_x(Alignment::Center)
-                                .align_y(Alignment::Center)
-                                .style(|_| container::Style {
-                                    background: Some(iced::Background::Color(theme::BG_SLATE_700)),
-                                    border: iced::Border {
-                                        radius: 4.0.into(),
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                }),
-                            space_y(5.0),
-                            text(book_name)
-                                .size(12)
-                                .font(iced::Font {
-                                    weight: iced::font::Weight::Bold,
-                                    ..Default::default()
-                                })
-                                .color(theme::TEXT_SLATE_300)
-                                .width(Length::Fixed(120.0)),
-                        ]
-                        .align_x(Alignment::Center),
-                    )
-                    .padding(10)
-                    .width(Length::Fixed(140.0))
-                    .style(|_| container::Style {
-                        background: Some(iced::Background::Color(theme::BG_SLATE_800)),
-                        border: iced::Border {
-                            color: theme::BG_SLATE_700,
-                            width: 1.0,
-                            radius: 6.0.into(),
-                        },
-                        ..Default::default()
-                    })
+                    let book = self.books.iter().find(|f| f.id() == book_name);
+                    // println!("{}", book_name);
+                    // println!("{:?}", self.books.first());
+                    match book {
+                        Some(Book::Novel(novel)) => novel.render_card(),
+                        Some(Book::WebNovel(wn)) => wn.render_card(),
+                        None => text(book_name).into(),
+                    }
+                    // container(
+                    //     column![
+                    //         container(text("📖").size(24))
+                    //             .width(Length::Fixed(40.0))
+                    //             .height(Length::Fixed(40.0))
+                    //             .align_x(Alignment::Center)
+                    //             .align_y(Alignment::Center)
+                    //             .style(|_| container::Style {
+                    //                 background: Some(iced::Background::Color(theme::BG_SLATE_700)),
+                    //                 border: iced::Border {
+                    //                     radius: 4.0.into(),
+                    //                     ..Default::default()
+                    //                 },
+                    //                 ..Default::default()
+                    //             }),
+                    //         space_y(5.0),
+                    //         text(book_name)
+                    //             .size(12)
+                    //             .font(iced::Font {
+                    //                 weight: iced::font::Weight::Bold,
+                    //                 ..Default::default()
+                    //             })
+                    //             .color(theme::TEXT_SLATE_300)
+                    //             .width(Length::Fixed(120.0)),
+                    //     ]
+                    //     .align_x(Alignment::Center),
+                    // )
+                    // .padding(10)
+                    // .width(Length::Fixed(140.0))
+                    // .style(|_| container::Style {
+                    //     background: Some(iced::Background::Color(theme::BG_SLATE_800)),
+                    //     border: iced::Border {
+                    //         color: theme::BG_SLATE_700,
+                    //         width: 1.0,
+                    //         radius: 6.0.into(),
+                    //     },
+                    //     ..Default::default()
+                    // })
                     .into()
                 }))
                 .spacing(10);
