@@ -1,13 +1,11 @@
 use crate::configurable_fetcher::ConfigurableFetcher;
 use crate::configurable_parser::ConfigurableParser;
 use crate::models::{
-    ActionEngine, DynamicMode, FetchMethod, HomeSection, NativeTarget, ParseMethod,
-    ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult, SourceConfig,
+    DynamicMode, FetchMethod, HomeSection, NativeTarget, ParseMethod,
+    ParsedBookDetails, ParsedChapter, ParsedChapterInfo, SearchResult,
     SourceWithConfig,
 };
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, USER_AGENT};
-use std::path::PathBuf;
-use tokio::fs;
 
 const _NATIVE_FETCH_MSG: &str = "Native fetching is not implemented yet";
 const NATIVE_PARSE_MSG: &str = "Native CSS selector parsing is not implemented yet";
@@ -183,19 +181,25 @@ impl Fetcher {
         &self,
         source: &SourceWithConfig,
         book_id: &str,
-        _nb_chap: i32,
+        page: i32,
     ) -> Result<Vec<ParsedChapterInfo>, String> {
         let html = match &source.config.chapters_list.fetch {
             FetchMethod::Rust { .. } => {
-                let url = Self::resolve_chapters_list_url(source, book_id)
+                let base_url = Self::resolve_chapters_list_url(source, book_id)
                     .unwrap_or_else(|| Self::resolve_details_url(source, book_id));
+                let url = if page > 1 {
+                    format!("{}?page={}", base_url, page)
+                } else {
+                    base_url
+                };
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js => {
                 let config = source.config.clone();
-                let fetcher = ConfigurableFetcher::new(config);
+                let fetcher = ConfigurableFetcher::new(source.source.id.clone(), config);
                 fetcher
-                    .fetch_chapters_list(book_id)
+                    .fetch_chapters_list(book_id, page)
+                    .await
                     .map_err(|e| e.to_string())?
             }
             FetchMethod::HeadlessBrowser => {
@@ -207,7 +211,7 @@ impl Fetcher {
             ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
             ParseMethod::Js => {
                 let config = source.config.clone();
-                let parser = ConfigurableParser::new(config);
+                let parser = ConfigurableParser::new(source.source.id.clone(), config);
                 parser.parse_chapters_only(&html).map_err(|e| e.to_string())
             }
         }
@@ -224,8 +228,11 @@ impl Fetcher {
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js => {
-                let fetcher = ConfigurableFetcher::new(source.config.clone());
-                fetcher.fetch_details(&book_id).map_err(|e| e.to_string())?
+                let fetcher = ConfigurableFetcher::new(source.source.id.clone(), source.config.clone());
+                fetcher
+                    .fetch_details(&book_id)
+                    .await
+                    .map_err(|e| e.to_string())?
             }
             FetchMethod::HeadlessBrowser => {
                 return Err("Headless browser fetching is not supported".to_string());
@@ -235,7 +242,7 @@ impl Fetcher {
         match &source.config.details.parse {
             ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
             ParseMethod::Js => {
-                let parser = ConfigurableParser::new(source.config.clone());
+                let parser = ConfigurableParser::new(source.source.id.clone(), source.config.clone());
                 parser
                     .parse_book_details(&html, book_id)
                     .map_err(|e| e.to_string())
@@ -245,7 +252,7 @@ impl Fetcher {
 
     pub async fn get_home(&self, source: &SourceWithConfig) -> Result<Vec<HomeSection>, String> {
         // 1. Fetching Phase
-        let config_clone = source.config.clone();
+        //let config_clone = source.config.clone();
         let html = match &source.config.home.fetch {
             FetchMethod::Rust { .. } => {
                 let url = Self::resolve_home_url(source);
@@ -259,23 +266,22 @@ impl Fetcher {
             FetchMethod::Js { .. } => {
                 // 1. Define the variables you need to move into the background thread
                 let config_clone = source.config.clone();
+                let source_id = source.source.id.clone();
                 let source_name = source.source.name.clone(); // Cloning the name is a good practice to avoid holding references across the .await
 
                 // 2. Run the blocking JS fetch on a background thread
-                tokio::task::spawn_blocking(move || {
-                    let fetcher = ConfigurableFetcher::new(config_clone);
-                    fetcher.fetch_home()
-                })
-                .await
-                // 3. Handle Tokio's JoinError (if the background thread panicked)
-                .map_err(|e| {
-                    format!(
-                        "JS fetch script execution panicked for '{}': {e}",
-                        source_name
-                    )
-                })?
-                // 4. Handle the actual error returned by fetch_home()
-                .map_err(|e| format!("JS fetch failed: {e}"))?
+                let fetcher = ConfigurableFetcher::new(source_id, config_clone);
+                fetcher
+                    .fetch_home()
+                    .await
+                    // 3. Handle Tokio's JoinError (if the background thread panicked)
+                    .map_err(|e| {
+                        format!(
+                            "JS fetch script execution panicked for '{}': {e}",
+                            source_name
+                        )
+                    })?
+
                 // ^^^ NO SEMICOLON! This allows the String to be returned.
             }
             FetchMethod::HeadlessBrowser => {
@@ -292,7 +298,7 @@ impl Fetcher {
                 source.source.name
             )),
             ParseMethod::Js => {
-                let parser = ConfigurableParser::new(source.config.clone());
+                let parser = ConfigurableParser::new(source.source.id.clone(), source.config.clone());
                 parser.parse_home(&html, &source.source.url).map_err(|e| {
                     format!("JS parsing failed for source '{}': {e}", source.source.name)
                 })
@@ -311,9 +317,10 @@ impl Fetcher {
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js { .. } => {
-                let fetcher = ConfigurableFetcher::new(source.config.clone());
+                let fetcher = ConfigurableFetcher::new(source.source.id.clone(), source.config.clone());
                 fetcher
                     .fetch_chapter_content(&book_id, &chapter_id)
+                    .await
                     .map_err(|e| e.to_string())?
             }
             FetchMethod::HeadlessBrowser => {
@@ -324,7 +331,7 @@ impl Fetcher {
         match &source.config.chapter.parse {
             ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
             ParseMethod::Js => {
-                let parser = ConfigurableParser::new(source.config.clone());
+                let parser = ConfigurableParser::new(source.source.id.clone(), source.config.clone());
                 parser
                     .parse_chapter_content(&html)
                     .map_err(|e| e.to_string())
@@ -351,9 +358,10 @@ impl Fetcher {
                 self.fetch_native_url(&url).await?
             }
             FetchMethod::Js { .. } => {
-                let fetcher = ConfigurableFetcher::new(source.config.clone());
+                let fetcher = ConfigurableFetcher::new(source.source.id.clone(), source.config.clone());
                 fetcher
                     .fetch_search(keyword, genre)
+                    .await
                     .map_err(|e| e.to_string())?
             }
             FetchMethod::HeadlessBrowser => {
@@ -364,7 +372,7 @@ impl Fetcher {
         match &search_config.parse {
             ParseMethod::Rust => Err(NATIVE_PARSE_MSG.to_string()),
             ParseMethod::Js => {
-                let parser = ConfigurableParser::new(source.config.clone());
+                let parser = ConfigurableParser::new(source.source.id.clone(), source.config.clone());
                 parser
                     .parse_search_results(&html)
                     .map_err(|e| e.to_string())
@@ -372,37 +380,4 @@ impl Fetcher {
         }
     }
 
-    #[allow(dead_code)]
-    async fn load_js_script(&self, source: &SourceWithConfig) -> Option<String> {
-        let script_path = source.config.script_path.as_deref().unwrap_or("index.js");
-
-        let resolved = Self::resolve_script_path(source, script_path);
-        fs::read_to_string(resolved).await.ok()
-    }
-
-    fn resolve_script_path(source: &SourceWithConfig, script_path: &str) -> PathBuf {
-        let path = PathBuf::from(script_path);
-        let mut path = if path.is_absolute() {
-            path
-        } else if path.components().count() == 1 && script_path == "index.js" {
-            PathBuf::from("sources").join(&source.source.id).join(path)
-        } else {
-            path
-        };
-
-        if path.is_relative() && !path.exists() {
-            if let Ok(cwd) = std::env::current_dir() {
-                let mut current = cwd.as_path();
-                while let Some(parent) = current.parent() {
-                    let candidate = parent.join(&path);
-                    if candidate.exists() {
-                        path = candidate;
-                        break;
-                    }
-                    current = parent;
-                }
-            }
-        }
-        path
-    }
 }

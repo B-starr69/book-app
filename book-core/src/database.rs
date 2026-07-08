@@ -1,6 +1,6 @@
 use crate::models::{
-    BaseBook, Book, BookFormat, Chapter, Novel, Repository, Source, SourceConfig, SourceType,
-    SourceWithConfig, WebNovel,
+    BaseBook, Book, BookFormat, Chapter, Novel, Repository, Source, SourceType, SourceWithConfig,
+    WebNovel,
 };
 use crate::platform;
 use crate::storage;
@@ -39,6 +39,7 @@ impl Database {
     pub async fn open_local() -> Result<Self, libsql::Error> {
         let path = platform::get_db_path();
         if let Some(parent) = path.parent() {
+            println!("{:?}", parent);
             let _ = std::fs::create_dir_all(parent);
         }
         Self::new(DatabaseMode::Local {
@@ -502,7 +503,7 @@ impl Database {
         let mut all_keys = Vec::new();
 
         for book in books.iter() {
-            let key = (book.source_id().clone(), book.id().clone());
+            let key = (book.source_id().to_string(), book.id().to_string());
             all_keys.push(key.clone());
             if book.is_webnovel() {
                 webnovel_keys.push(key);
@@ -522,7 +523,7 @@ impl Database {
             self.conn
                 .execute(
                     "INSERT INTO temp_book_keys (source_id, book_id) VALUES (?1, ?2)",
-                    params![source_id.clone(), book_id.clone()],
+                    params![source_id.as_str(), book_id.as_str()],
                 )
                 .await?;
         }
@@ -681,6 +682,41 @@ impl Database {
         Ok(())
     }
 
+    pub async fn save_chapters(
+        &self,
+        book_id: &str,
+        source_id: &str,
+        chapters: &[Chapter],
+    ) -> Result<(), libsql::Error> {
+        self.conn.execute_batch("BEGIN IMMEDIATE;").await?;
+        let result = async {
+            for chapter in chapters {
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO chapters (id, book_id, source_id, title, date, file_path, progress, last_read)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        chapter.id.clone(),
+                        book_id.to_string(),
+                        source_id.to_string(),
+                        chapter.title.clone(),
+                        chapter.date,
+                        chapter.file_path.clone(),
+                        chapter.progress as f64,
+                        chapter.last_read
+                    ],
+                ).await?;
+            }
+            Ok(())
+        }.await;
+
+        if result.is_ok() {
+            self.conn.execute("COMMIT;", ()).await?;
+        } else {
+            let _ = self.conn.execute("ROLLBACK;", ()).await;
+        }
+        result
+    }
+
     pub async fn get_sources(&self) -> Result<Vec<SourceWithConfig>, libsql::Error> {
         let mut rows = self.conn.query("SELECT id, url, cover_url_pattern, name, icon_url, description, config FROM sources", ()).await?;
         let mut sources = Vec::new();
@@ -705,11 +741,10 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use crate::database::*;
-    use crate::models::*;
 
     #[tokio::test]
     async fn test_database_schema() {
-        let database = Database::new(DatabaseMode::Local {
+        let _database = Database::new(DatabaseMode::Local {
             path: "Library.db".to_string(),
         })
         .await;

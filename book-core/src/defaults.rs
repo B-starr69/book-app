@@ -1,11 +1,8 @@
 //! Default source configurations.
 
-use crate::{
-    models::{
-        ActionConfig, DynamicMode, FetchMethod, NativeTarget, ParseMethod, Source, SourceConfig,
-        SourceWithConfig,
-    },
-    BookFormat,
+use crate::models::{
+    ActionConfig, FetchMethod, ParseMethod, Source, SourceConfig,
+    SourceWithConfig,
 };
 
 /// Get the default NovelFire source configuration.
@@ -59,10 +56,26 @@ pub fn all_default_sources() -> Vec<SourceWithConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{database, models::ActionEngine, Database};
 
     #[test]
     fn novelfire_uses_js_strategy() {
+        let _source = novelfire_source();
+    }
+
+    #[test]
+    fn test_parse_chapter_content() {
         let source = novelfire_source();
+        let parser = crate::configurable_parser::ConfigurableParser::new(source.source.id, source.config);
+        
+        let html_content = std::fs::read_to_string("../sources/novelfire/chapter_example.html")
+            .unwrap_or_else(|_| std::fs::read_to_string("sources/novelfire/chapter_example.html").unwrap());
+            
+        let parsed = parser.parse_chapter_content(&html_content).unwrap();
+        
+        assert_eq!(
+            parsed.title,
+            "Chapter 1: Countdown to Extending Life - I Made the Devilish Screenwriter Cry!"
+        );
+        assert!(parsed.content.contains("Palace Intrigue"));
     }
 }

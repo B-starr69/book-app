@@ -195,3 +195,103 @@ fn extract_epub_metadata(path: &Path) -> Result<(String, String)> {
     db.save_book(&Book::Novel(book.clone())).await?;
     Ok(Book::Novel(book))
 }
+
+/// Resolve a script path based on several potential locations.
+pub fn resolve_script_path(source_id: &str, script_path: &str) -> PathBuf {
+    let path_buf = PathBuf::from(script_path);
+    if path_buf.is_absolute() {
+        return path_buf;
+    }
+    
+    // 1. Try directly relative to CWD
+    if path_buf.exists() {
+        return path_buf;
+    }
+
+    // 2. Try sources/{source_id}/{script_path}
+    let sources_rel = PathBuf::from("sources").join(source_id).join(&path_buf);
+    if sources_rel.exists() {
+        return sources_rel;
+    }
+
+    // 3. Try app data directory
+    let app_data_path = platform::get_app_data_dir().join(&path_buf);
+    if app_data_path.exists() {
+        return app_data_path;
+    }
+    let app_data_sources_path = platform::get_app_data_dir()
+        .join("sources")
+        .join(source_id)
+        .join(&path_buf);
+    if app_data_sources_path.exists() {
+        return app_data_sources_path;
+    }
+
+    // 4. Try traversing parents for both direct and sources/... variants
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut current = cwd.as_path();
+        loop {
+            let candidate_direct = current.join(&path_buf);
+            if candidate_direct.exists() {
+                return candidate_direct;
+            }
+            let candidate_sources = current.join("sources").join(source_id).join(&path_buf);
+            if candidate_sources.exists() {
+                return candidate_sources;
+            }
+            match current.parent() {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+    }
+
+    // Fallback: Default to app data directory path
+    app_data_path
+}
+
+/// Load the contents of a script file after resolving its path.
+pub fn load_script_content(source_id: &str, script_path: &str) -> std::io::Result<String> {
+    let resolved = resolve_script_path(source_id, script_path);
+    std::fs::read_to_string(resolved)
+}
+
+/// Get the local path where a book's cover image is cached.
+pub fn get_cover_path(source_id: &str, book_id: &str, cover_url: &str) -> Option<PathBuf> {
+    if cover_url.is_empty() {
+        return None;
+    }
+    let ext = if cover_url.contains(".png") {
+        "png"
+    } else if cover_url.contains(".webp") {
+        "webp"
+    } else {
+        "jpg"
+    };
+    let filename = format!("{}_{}.{}", safe_segment(source_id), safe_segment(book_id), ext);
+    Some(platform::get_covers_dir().join(filename))
+}
+
+/// Download the cover image and save it to the covers cache directory if it's not already there.
+pub async fn download_cover_if_needed(source_id: &str, book_id: &str, cover_url: &str) -> Option<PathBuf> {
+    let cover_path = get_cover_path(source_id, book_id, cover_url)?;
+    if cover_path.exists() {
+        return Some(cover_path);
+    }
+    
+    // Download using reqwest
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .ok()?;
+        
+    let response = client.get(cover_url).send().await.ok()?;
+    let bytes = response.bytes().await.ok()?;
+    
+    if let Some(parent) = cover_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&cover_path, bytes).ok()?;
+    Some(cover_path)
+}
+
