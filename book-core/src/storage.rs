@@ -295,3 +295,41 @@ pub async fn download_cover_if_needed(source_id: &str, book_id: &str, cover_url:
     Some(cover_path)
 }
 
+pub fn webnovel_image_path(source_id: &str, book_id: &str, image_url: &str) -> PathBuf {
+    let ext = if image_url.contains(".png") {
+        "png"
+    } else if image_url.contains(".webp") {
+        "webp"
+    } else if image_url.contains(".gif") {
+        "gif"
+    } else {
+        "jpg"
+    };
+    let hash = safe_segment(image_url);
+    webnovel_dir(source_id, book_id)
+        .join("images")
+        .join(format!("{hash}.{ext}"))
+}
+
+pub async fn download_image_if_needed(source_id: &str, book_id: &str, image_url: &str) -> Result<PathBuf, String> {
+    let local_path = webnovel_image_path(source_id, book_id, image_url);
+    if local_path.exists() {
+        return Ok(local_path);
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| e.to_string())?;
+        
+    let response = client.get(image_url).send().await.map_err(|e| e.to_string())?;
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    
+    if let Some(parent) = local_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&local_path, bytes).map_err(|e| e.to_string())?;
+    Ok(local_path)
+}
+
+

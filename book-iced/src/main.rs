@@ -1,7 +1,8 @@
-pub mod theme;
-pub mod helpers;
-pub mod book_render;
 pub mod app;
+pub mod book_render;
+pub mod helpers;
+pub mod html_parser;
+pub mod theme;
 
 use app::MyApp;
 

@@ -1,4 +1,4 @@
-use iced::widget::{Image, button, column, container, row, scrollable, text, text_input};
+use iced::widget::{Image, button, column, container, row, scrollable, text, text_input, rich_text, span};
 use iced::{Alignment, Element, Length, Task};
 use std::sync::Arc;
 
@@ -49,6 +49,9 @@ pub enum Message {
     CloseReader,
     DatabaseUpdated,
     ForceSyncBook(String),
+    ToggleBookMenu,
+    ReaderScrolled(iced::widget::scrollable::Viewport),
+    ImageDownloaded(Result<std::path::PathBuf, String>),
 }
 
 pub struct MyApp {
@@ -70,10 +73,11 @@ pub struct MyApp {
     pub search_error: Option<String>,
     pub viewed_book: Option<Book>,
     pub discover_fetch_queue: Vec<String>,
-    pub active_chapter: Option<(book_core::models::Chapter, String)>,
+    pub active_chapter: Option<(book_core::models::Chapter, Vec<crate::html_parser::ReaderBlock>)>,
     pub is_loading_chapter: bool,
     pub chapter_load_error: Option<String>,
     pub loading_text: Option<String>,
+    pub show_book_menu: bool,
 }
 
 impl MyApp {
@@ -101,6 +105,7 @@ impl MyApp {
             is_loading_chapter: false,
             chapter_load_error: None,
             loading_text: None,
+            show_book_menu: false,
         };
 
         let task = Task::perform(
@@ -319,6 +324,7 @@ impl MyApp {
                 Task::none()
             }
             Message::BookFetchedAndView(result) => {
+                self.show_book_menu = false;
                 self.is_loading_chapter = false;
                 self.loading_text = None;
                 match result {
@@ -403,6 +409,7 @@ impl MyApp {
                 Task::none()
             }
             Message::LoadBookDetails(id) => {
+                self.show_book_menu = false;
                 let db = match &self.database {
                     Some(db) => Arc::clone(db),
                     None => return Task::none(),
@@ -426,6 +433,7 @@ impl MyApp {
                 }
             }
             Message::ViewBook(book_opt) => {
+                self.show_book_menu = false;
                 self.viewed_book = book_opt.clone();
                 if let Some(book) = book_opt {
                     let db = match &self.database {
@@ -502,6 +510,7 @@ impl MyApp {
                 Task::none()
             }
             Message::LoadChapter(chapter_id, _chapter_title, force_refresh) => {
+                self.show_book_menu = false;
                 let book = match &self.viewed_book {
                     Some(book) => book,
                     None => return Task::none(),
@@ -517,6 +526,21 @@ impl MyApp {
                     .cloned();
 
                 if let Some(source) = source {
+                    let mut save_task = Task::none();
+                    if let Some((old_chapter, _)) = &self.active_chapter {
+                        let old_b_id = book.id().to_string();
+                        let old_s_id = book.source_id().to_string();
+                        let old_c_id = old_chapter.id.clone();
+                        let old_progress = old_chapter.progress;
+                        let old_db = Arc::clone(&db);
+                        save_task = Task::perform(
+                            async move {
+                                let _ = old_db.update_chapter_progress(&old_b_id, &old_s_id, &old_c_id, old_progress).await;
+                            },
+                            |_| Message::DatabaseUpdated,
+                        );
+                    }
+
                     self.is_loading_chapter = true;
                     self.chapter_load_error = None;
                     if force_refresh {
@@ -530,19 +554,21 @@ impl MyApp {
                     let b_id = book_id.clone();
                     let s_id = source.source.id.clone();
                     let c_id = chap_id.clone();
-                    Task::perform(
+                    let load_task = Task::perform(
                         async move {
                             book_core::api::get_chapter_content(&*db, &source, &book_id, &chap_id, force_refresh).await
                         },
                         move |res| {
                             Message::ChapterLoaded(b_id.clone(), s_id.clone(), c_id.clone(), res)
                         },
-                    )
+                    );
+                    Task::batch(vec![save_task, load_task])
                 } else {
                     Task::none()
                 }
             }
             Message::ForceSyncBook(id) => {
+                self.show_book_menu = false;
                 let db = match &self.database {
                     Some(db) => Arc::clone(db),
                     None => return Task::none(),
@@ -568,6 +594,16 @@ impl MyApp {
                     Task::none()
                 }
             }
+            Message::ToggleBookMenu => {
+                self.show_book_menu = !self.show_book_menu;
+                Task::none()
+            }
+            Message::ReaderScrolled(viewport) => {
+                if let Some((ref mut chapter, _)) = self.active_chapter {
+                    chapter.progress = viewport.relative_offset().y;
+                }
+                Task::none()
+            }
             Message::ChapterLoaded(book_id, source_id, chapter_id, result) => {
                 self.is_loading_chapter = false;
                 match result {
@@ -580,7 +616,8 @@ impl MyApp {
                                 };
 
                                 if let Some(chapter) = chapter_opt {
-                                    self.active_chapter = Some((chapter.clone(), content));
+                                    let blocks = crate::html_parser::parse_html(&content);
+                                    self.active_chapter = Some((chapter.clone(), blocks.clone()));
                                     self.chapter_load_error = None;
 
                                     // Mark chapter as read in DB and locally
@@ -595,16 +632,52 @@ impl MyApp {
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .unwrap()
                                                 .as_secs() as i64;
-                                            chap.progress = 1.0;
                                         }
                                     }
 
-                                    return Task::perform(
+                                    let initial_progress = chapter.progress;
+                                    let task_b_id = b_id.clone();
+                                    let task_s_id = s_id.clone();
+                                    let task_c_id = c_id.clone();
+                                    let db_task = Task::perform(
                                         async move {
-                                            let _ = db.update_chapter_progress(&b_id, &s_id, &c_id, 1.0).await;
+                                            let _ = db.update_chapter_progress(&task_b_id, &task_s_id, &task_c_id, initial_progress).await;
                                         },
                                         |_| Message::DatabaseUpdated,
                                     );
+
+                                    let scroll_task = if initial_progress > 0.0 {
+                                        iced::widget::operation::snap_to(
+                                            iced::widget::Id::new("reader_scroll"),
+                                            iced::widget::operation::RelativeOffset {
+                                                x: 0.0,
+                                                y: initial_progress,
+                                            },
+                                        )
+                                    } else {
+                                        Task::none()
+                                    };
+
+                                    let mut tasks = vec![db_task, scroll_task];
+
+                                    for block in &blocks {
+                                        if let crate::html_parser::ReaderBlock::Image(url) = block {
+                                            let local_path = book_core::storage::webnovel_image_path(&s_id, &b_id, url);
+                                            if !local_path.exists() {
+                                                let ref_s_id = s_id.clone();
+                                                let ref_b_id = b_id.clone();
+                                                let img_url = url.clone();
+                                                tasks.push(Task::perform(
+                                                    async move {
+                                                        book_core::storage::download_image_if_needed(&ref_s_id, &ref_b_id, &img_url).await
+                                                    },
+                                                    Message::ImageDownloaded,
+                                                ));
+                                            }
+                                        }
+                                    }
+
+                                    return Task::batch(tasks);
                                 }
                             }
                         }
@@ -615,7 +688,41 @@ impl MyApp {
                 }
                 Task::none()
             }
+            Message::ImageDownloaded(res) => {
+                if let Err(e) = res {
+                    eprintln!("Error downloading chapter image: {}", e);
+                }
+                Task::none()
+            }
             Message::CloseReader => {
+                self.show_book_menu = false;
+                if let (Some((chapter, _)), Some(book)) = (&self.active_chapter, &self.viewed_book) {
+                    let db = self.database.as_ref().unwrap().clone();
+                    let b_id = book.id().to_string();
+                    let s_id = book.source_id().to_string();
+                    let c_id = chapter.id.clone();
+                    let progress = chapter.progress;
+
+                    self.active_chapter = None;
+
+                    let ref_b_id = b_id.clone();
+                    let ref_db = db.clone();
+
+                    let source_opt = self.sources.iter().find(|s| s.source.id == s_id).cloned();
+
+                    if let Some(source) = source_opt {
+                        return Task::perform(
+                            async move {
+                                let _ = db.update_chapter_progress(&b_id, &s_id, &c_id, progress).await;
+                                book_core::api::get_book(&*ref_db, &source, &ref_b_id, false, false).await
+                            },
+                            |res| match res {
+                                Ok(refreshed_book) => Message::ViewBook(Some(refreshed_book)),
+                                Err(_) => Message::DatabaseUpdated,
+                            },
+                        );
+                    }
+                }
                 self.active_chapter = None;
                 Task::none()
             }
@@ -874,8 +981,8 @@ impl MyApp {
             .padding(10);
 
         let detail_element = match book {
-            Book::Novel(novel) => novel.render_detail(),
-            Book::WebNovel(wn) => wn.render_detail(),
+            Book::Novel(novel) => novel.render_detail(self.show_book_menu),
+            Book::WebNovel(wn) => wn.render_detail(self.show_book_menu),
         };
 
         column![back_btn, space_y(20.0), detail_element]
@@ -1601,7 +1708,11 @@ impl MyApp {
         .into()
     }
 
-    fn render_reader<'a>(&'a self, chapter: &'a book_core::models::Chapter, html_content: &'a str) -> Element<'a, Message> {
+    fn render_reader<'a>(
+        &'a self,
+        chapter: &'a book_core::models::Chapter,
+        blocks: &'a [crate::html_parser::ReaderBlock],
+    ) -> Element<'a, Message> {
         let back_btn = button(bold_text("← Back to Book").size(14).color(theme::TEXT_SLATE_50))
             .on_press(Message::CloseReader)
             .style(|_, status| button::Style {
@@ -1620,7 +1731,11 @@ impl MyApp {
             })
             .padding(10);
 
-        let cleaned_text = clean_html_for_reader(html_content);
+        let (source_id, book_id) = if let Some(book) = &self.viewed_book {
+            (book.source_id().to_string(), book.id().to_string())
+        } else {
+            (String::new(), String::new())
+        };
 
         // Navigation buttons
         let mut prev_btn = button(bold_text("← Previous Chapter").size(14).color(theme::TEXT_SLATE_400))
@@ -1694,39 +1809,93 @@ impl MyApp {
             .spacing(20)
             .width(Length::Fill);
 
-        let refresh_btn = button(bold_text("↻ Force Sync").size(14).color(theme::TEXT_SLATE_50))
-            .on_press(Message::LoadChapter(chapter.id.clone(), chapter.title.clone(), true))
-            .style(|_, status| button::Style {
-                background: Some(iced::Background::Color(
-                    if status == button::Status::Hovered {
-                        theme::BG_SLATE_700
+        let mut reader_column = column![].spacing(15).width(Length::Fill);
+
+        for block in blocks {
+            match block {
+                crate::html_parser::ReaderBlock::Paragraph(spans) => {
+                    let mut spans_vec: Vec<iced::widget::text::Span<'_, ()>> = Vec::new();
+                    for span_item in spans {
+                        match span_item {
+                            crate::html_parser::ReaderSpan::Text(t) => {
+                                spans_vec.push(span(t.clone()).color(theme::TEXT_SLATE_300).size(16));
+                            }
+                            crate::html_parser::ReaderSpan::Bold(t) => {
+                                spans_vec.push(span(t.clone()).color(theme::TEXT_SLATE_50).size(16).font(iced::Font {
+                                    weight: iced::font::Weight::Bold,
+                                    ..Default::default()
+                                }));
+                            }
+                            crate::html_parser::ReaderSpan::Italic(t) => {
+                                spans_vec.push(span(t.clone()).color(theme::TEXT_SLATE_300).size(16).font(iced::Font {
+                                    style: iced::font::Style::Italic,
+                                    ..Default::default()
+                                }));
+                            }
+                            crate::html_parser::ReaderSpan::BoldItalic(t) => {
+                                spans_vec.push(span(t.clone()).color(theme::TEXT_SLATE_50).size(16).font(iced::Font {
+                                    weight: iced::font::Weight::Bold,
+                                    style: iced::font::Style::Italic,
+                                    ..Default::default()
+                                }));
+                            }
+                        }
+                    }
+                    reader_column = reader_column.push(rich_text(spans_vec));
+                }
+                crate::html_parser::ReaderBlock::Heading(t, level) => {
+                    let size = match level {
+                        1 => 22,
+                        2 => 20,
+                        3 => 18,
+                        _ => 16,
+                    };
+                    reader_column = reader_column.push(
+                        text(t.clone())
+                            .size(size)
+                            .color(theme::TEXT_SLATE_50)
+                            .font(iced::Font {
+                                weight: iced::font::Weight::Bold,
+                                ..Default::default()
+                            })
+                    );
+                }
+                crate::html_parser::ReaderBlock::Image(url) => {
+                    let local_path = book_core::storage::webnovel_image_path(&source_id, &book_id, url);
+                    if local_path.exists() {
+                        reader_column = reader_column.push(
+                            Image::new(iced::widget::image::Handle::from_path(local_path))
+                                .content_fit(iced::ContentFit::Contain)
+                                .width(Length::Fill)
+                        );
                     } else {
-                        theme::BG_SLATE_800
-                    },
-                )),
-                border: iced::Border {
-                    radius: 6.0.into(),
-                    color: theme::BG_SLATE_700,
-                    width: 1.0,
-                },
-                ..Default::default()
-            })
-            .padding(10);
+                        reader_column = reader_column.push(
+                            container(
+                                text("📷 Loading Image...").size(14).color(theme::TEXT_SLATE_400)
+                            )
+                            .padding(10)
+                            .style(|_| container::Style {
+                                background: Some(iced::Background::Color(theme::BG_SLATE_800)),
+                                ..Default::default()
+                            })
+                        );
+                    }
+                }
+            }
+        }
 
         let content_col = column![
-            row![back_btn, space_fill_x(), refresh_btn].align_y(Alignment::Center),
+            row![back_btn, space_fill_x()].align_y(Alignment::Center),
             space_y(20.0),
             bold_text(&chapter.title).size(24).color(theme::TEXT_SLATE_50),
             space_y(15.0),
             scrollable(
-                container(
-                    text(cleaned_text)
-                        .size(16)
-                        .color(theme::TEXT_SLATE_300)
-                )
-                .width(Length::Fill)
-                .padding(10)
+                container(reader_column)
+                    .width(Length::Fill)
+                    .padding(10)
             )
+            .id(iced::widget::Id::new("reader_scroll"))
+            .on_scroll(Message::ReaderScrolled)
             .height(Length::Fill),
             space_y(20.0),
             nav_row
@@ -1745,51 +1914,3 @@ impl MyApp {
     }
 }
 
-fn clean_html_for_reader(html: &str) -> String {
-    let mut cleaned = String::new();
-    let mut in_tag = false;
-    let mut in_entity = false;
-    let mut entity = String::new();
-
-    let html = html
-        .replace("<p>", "")
-        .replace("</p>", "\n\n")
-        .replace("<br>", "\n")
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("<div", "\n")
-        .replace("</div>", "\n");
-
-    for c in html.chars() {
-        if c == '<' {
-            in_tag = true;
-        } else if c == '>' {
-            in_tag = false;
-        } else if c == '&' {
-            in_entity = true;
-            entity.clear();
-        } else if in_entity && c == ';' {
-            in_entity = false;
-            match entity.as_str() {
-                "nbsp" => cleaned.push(' '),
-                "lt" => cleaned.push('<'),
-                "gt" => cleaned.push('>'),
-                "amp" => cleaned.push('&'),
-                "quot" => cleaned.push('"'),
-                "apos" => cleaned.push('\''),
-                _ => {}
-            }
-        } else if in_entity {
-            entity.push(c);
-        } else if !in_tag {
-            cleaned.push(c);
-        }
-    }
-
-    cleaned
-        .split('\n')
-        .map(|line| line.trim())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .replace("\n\n\n", "\n\n")
-}
